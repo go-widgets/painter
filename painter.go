@@ -44,9 +44,18 @@
 // rendering path.
 package painter
 
-// Rect is a rectangle in the painter's coordinate system. Same
-// shape as toolkit.Rect so future migration is a simple type-alias.
+// Rect is a rectangle in the painter's coordinate system. toolkit
+// aliases its own Rect to this one, so the method set is shared —
+// keep any helpers a consumer might want on it (Contains, etc.)
+// defined here.
 type Rect struct{ X, Y, W, H int }
+
+// Contains reports whether (px, py) falls inside r. The right +
+// bottom edges are EXCLUSIVE so a w*h rectangle covers exactly w*h
+// units (pixels for PixelPainter, cells for CellPainter).
+func (r Rect) Contains(px, py int) bool {
+	return px >= r.X && px < r.X+r.W && py >= r.Y && py < r.Y+r.H
+}
 
 // RGBA is a 32-bit colour value. Painters that can't represent a
 // given RGBA (a cell grid limited to 16 colours, for instance)
