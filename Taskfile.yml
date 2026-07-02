@@ -1,0 +1,37 @@
+version: "3"
+
+env:
+  CGO_ENABLED: "0"
+  GOWORK: "off"
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task -l
+
+  wasm:
+    desc: Build wui-wasm.wasm + copy wasm_exec.js from GOROOT
+    env:
+      GOOS: js
+      GOARCH: wasm
+    cmds:
+      - go build -o wui-wasm.wasm ./cmd/wui-wasm
+      - |
+        root="$(go env GOROOT)"
+        if [ -f "$root/lib/wasm/wasm_exec.js" ]; then
+          cp "$root/lib/wasm/wasm_exec.js" ./wasm_exec.js
+        else
+          cp "$root/misc/wasm/wasm_exec.js" ./wasm_exec.js
+        fi
+
+  serve:
+    desc: Build + serve the WUI demo on http://localhost:8091/
+    deps: [wasm]
+    cmds:
+      - python3 -m http.server 8091
+
+  clean:
+    desc: Remove build artefacts
+    cmds:
+      - rm -f wui-wasm.wasm wasm_exec.js

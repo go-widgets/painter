@@ -1,11 +1,14 @@
 # go-widgets/painter
 
 [![CI](https://github.com/go-widgets/painter/actions/workflows/ci.yml/badge.svg)](https://github.com/go-widgets/painter/actions/workflows/ci.yml)
+[![pages](https://github.com/go-widgets/painter/actions/workflows/pages.yml/badge.svg)](https://go-widgets.github.io/painter/)
 [![pkg.go.dev](https://img.shields.io/badge/pkg.go.dev-painter-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/go-widgets/painter)
 ![coverage](https://img.shields.io/badge/coverage-100%25-1a7f37)
 ![go](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8?logo=go&logoColor=white)
 ![status](https://img.shields.io/badge/status-prototype-9a6700)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-blue)](./LICENSE)
+
+**▶ Live demo: https://go-widgets.github.io/painter/**
 
 **Prototype** of a `Painter` abstraction that lets a single widget
 render into three deployment families with the *same code*:
@@ -59,24 +62,29 @@ go run ./cmd/wui-demo --out demo.png --theme dark
 # TUI — writes 24-bit-ANSI to stdout; point your terminal at it.
 go run ./cmd/tui-demo
 go run ./cmd/tui-demo --theme dark
+
+# WUI live in a browser — Chromium / Firefox / Safari:
+task serve                                      # http://localhost:8091/
 ```
 
-Both commands render **the exact same three widgets** (`Label`,
-two `Button`s, `ProgressBar`) through the exact same widget code
-in `widget.go`.
+All three render **the exact same three widgets** (`Label`, two
+`Button`s, `ProgressBar`) through the exact same widget code in
+`widget.go`. The only thing that changes between them is which
+`Painter` implementation the widget's `Draw` sees.
 
 ## What's in the box
 
-| File           | Contents                                             |
-| -------------- | ---------------------------------------------------- |
-| `painter.go`   | `Painter` interface, `Rect`, `RGBA`, `RGB` helper    |
-| `pixel.go`     | `PixelPainter` — writes into an RGBA `[]byte` buffer |
-| `cell.go`     | `CellPainter` — writes into a `[]Cell` grid + 24-bit-ANSI serializer |
-| `font.go`      | Minimal 5×7 bitmap font (uppercase + digits + punct.) |
-| `theme.go`     | `Theme` struct + `LightTheme` / `DarkTheme` palettes  |
-| `widget.go`    | Sample widgets: `Button`, `Label`, `ProgressBar`      |
-| `cmd/wui-demo` | Renders widgets to a PNG (WUI / GUI back-end proxy)   |
-| `cmd/tui-demo` | Renders widgets to stdout as 24-bit ANSI (TUI)        |
+| File           | Contents                                                             |
+| -------------- | -------------------------------------------------------------------- |
+| `painter.go`   | `Painter` interface, `Rect`, `RGBA`, `RGB` helper                    |
+| `pixel.go`     | `PixelPainter` — writes into an RGBA `[]byte` buffer                 |
+| `cell.go`      | `CellPainter` — writes into a `[]Cell` grid + 24-bit-ANSI serializer |
+| `font.go`      | Minimal 5×7 bitmap font (uppercase + digits + punct.)                |
+| `theme.go`     | `Theme` struct + `LightTheme` / `DarkTheme` palettes                 |
+| `widget.go`    | Sample widgets: `Button`, `Label`, `ProgressBar`                     |
+| `cmd/wui-demo` | Renders widgets to a PNG (WUI / GUI back-end proxy)                  |
+| `cmd/wui-wasm` | Renders widgets to a browser `<canvas>` (WUI live demo)              |
+| `cmd/tui-demo` | Renders widgets to stdout as 24-bit ANSI (TUI)                       |
 
 ## Status
 

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>go-widgets painter — WUI wasm demo</title>
+<meta name="description" content="Same widget code — Button, Label, ProgressBar — rendered into a browser canvas by the go-widgets/painter PixelPainter.">
+<style>
+  html, body {
+    margin: 0;
+    background: #0b0d12;
+    color: #e6e8f0;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px; text-align: center; }
+  h1 { font-size: 1.8rem; letter-spacing: -.02em; margin: 0 0 8px; }
+  .tagline { color: #9aa0b4; margin: 0 0 28px; }
+  #screen {
+    display: block;
+    margin: 0 auto;
+    background: #ffffff;
+    border: 1px solid #262c40;
+    border-radius: 12px;
+    max-width: 100%;
+    height: auto;
+    box-shadow: 0 14px 44px rgba(20,184,166,.2);
+  }
+  .controls { margin: 22px 0 24px; display: inline-flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .controls button {
+    background: #14b8a6; color: #0b0d12; border: none;
+    padding: 10px 18px; border-radius: 8px; cursor: pointer;
+    font: inherit; font-weight: 600;
+  }
+  .controls button.alt { background: transparent; color: #14b8a6; border: 1px solid #14b8a6; }
+  .controls button:hover { filter: brightness(1.1); }
+  .hint { color: #9aa0b4; font-size: .9rem; margin: 14px 0 24px; }
+  #status { color: #9aa0b4; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; }
+  #err { color: #ff5f57; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; white-space: pre-wrap; }
+  a { color: #14b8a6; }
+  footer { color: #9aa0b4; text-align: center; padding: 14px 0 40px; font-size: .85rem; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>go-widgets/painter</h1>
+    <p class="tagline">Prototype — same widget code, WUI/GUI/TUI back-ends. This page runs the <strong>WUI</strong> path: <a href="https://github.com/go-widgets/painter">PixelPainter</a> writes an RGBA buffer, JS <code>putImageData</code>s it into &lt;canvas&gt;.</p>
+    <canvas id="screen" width="480" height="320"></canvas>
+    <div class="controls">
+      <button id="theme">theme: light → dark</button>
+      <button class="alt" id="pressed">swap pressed button</button>
+    </div>
+    <p class="hint">The same <code>Button</code> / <code>Label</code> / <code>ProgressBar</code> also render as a PNG (<code>go run ./cmd/wui-demo</code>) and as ANSI in a terminal (<code>go run ./cmd/tui-demo</code>).</p>
+    <p id="status">loading wasm…</p>
+    <div id="err"></div>
+    <p><a href="https://github.com/go-widgets">go-widgets</a> · <a href="https://github.com/go-widgets/painter">source</a></p>
+  </div>
+  <footer>BSD-3-Clause · pure Go · CGO=0</footer>
+  <script src="wasm_exec.js"></script>
+  <script>
+    (async () => {
+      let dark = false;
+      document.addEventListener("painter:ready", () => {
+        document.getElementById("status").textContent = "ready — widgets rendered by go-widgets/painter";
+      }, { once: true });
+      try {
+        const go = new Go();
+        const res = await WebAssembly.instantiateStreaming(fetch("wui-wasm.wasm"), go.importObject);
+        go.run(res.instance);
+      } catch (e) {
+        document.getElementById("err").textContent = "failed to boot the wasm: " + (e && e.message ? e.message : e);
+      }
+      document.getElementById("theme").addEventListener("click", () => {
+        dark = !dark;
+        window.painterSetTheme(dark ? "dark" : "light");
+        document.getElementById("theme").textContent = "theme: " + (dark ? "dark → light" : "light → dark");
+      });
+      document.getElementById("pressed").addEventListener("click", () => {
+        window.painterTogglePressed();
+      });
+    })();
+  </script>
+</body>
+</html>

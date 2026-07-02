@@ -1,0 +1,4 @@
+# Build artefacts produced by the Taskfile.
+wui-wasm.wasm
+wasm_exec.js
+site/
