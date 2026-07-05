@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,6 +62,47 @@ func TestRunOutOpenError(t *testing.T) {
 	code := run([]string{"--out", "/nonexistent_dir_xyz/shot.png"}, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("run exit=%d, want 1", code)
+	}
+}
+
+// errWriter fails every write — used to exercise the png.Encode error
+// branch of run() when writing to stdout (--out=-).
+type errWriter struct{}
+
+func (errWriter) Write(_ []byte) (int, error) { return 0, errors.New("boom") }
+
+func TestRunPNGEncodeError(t *testing.T) {
+	var stderr bytes.Buffer
+	code := run([]string{"--out", "-"}, errWriter{}, &stderr)
+	if code != 1 {
+		t.Fatalf("run exit=%d, want 1", code)
+	}
+}
+
+// TestMainSuccessPath drives main() through the runFunc/osExit seams so
+// os.Exit is not actually invoked and the main() function itself gets
+// covered.
+func TestMainSuccessPath(t *testing.T) {
+	origRun, origExit := runFunc, osExit
+	defer func() { runFunc, osExit = origRun, origExit }()
+	got := -1
+	runFunc = func([]string, io.Writer, io.Writer) int { return 0 }
+	osExit = func(code int) { got = code }
+	main()
+	if got != 0 {
+		t.Fatalf("main() called osExit(%d), want 0", got)
+	}
+}
+
+func TestMainErrorPath(t *testing.T) {
+	origRun, origExit := runFunc, osExit
+	defer func() { runFunc, osExit = origRun, origExit }()
+	got := -1
+	runFunc = func([]string, io.Writer, io.Writer) int { return 1 }
+	osExit = func(code int) { got = code }
+	main()
+	if got != 1 {
+		t.Fatalf("main() called osExit(%d), want 1", got)
 	}
 }
 

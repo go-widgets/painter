@@ -17,8 +17,15 @@ import (
 	"github.com/go-widgets/painter"
 )
 
+// runFunc / osExit are dependency-injection seams so tests can drive
+// main()'s success and error branches without spawning a subprocess.
+var (
+	runFunc = run
+	osExit  = os.Exit
+)
+
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	osExit(runFunc(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func run(args []string, stdout, stderr io.Writer) int {

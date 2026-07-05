@@ -30,10 +30,6 @@ jobs:
         run: go vet ./...
 
       - name: Test library packages with coverage
-        # The cmd/... packages are binaries whose main() calls
-        # os.Exit / log.Fatal — untestable without subprocess tricks.
-        # The library packages carry the 100% coverage gate; cmds
-        # are built + smoke-tested via the cross-compile step below.
         run: go test -coverprofile=coverage.out $(go list ./... | grep -v '/cmd/')
 
       - name: Assert 100% statement coverage (library packages)
@@ -46,8 +42,20 @@ jobs:
             exit 1
           fi
 
-      - name: Test cmd packages (no coverage gate)
-        run: go test ./cmd/...
+      - name: Test cmd packages (also gated at 100%)
+        # cmd/*-demo factor main() through a run(args, stdout, stderr) int
+        # seam + runFunc/osExit dependency injection, so the whole package
+        # holds 100% statement coverage — no reason to relax the gate here
+        # just because it's under cmd/.
+        run: |
+          go test -coverprofile=coverage-cmd.out ./cmd/...
+          total=$(go tool cover -func=coverage-cmd.out | awk 'END { gsub(/%/,"",$3); print $3 }')
+          echo "cmd coverage: ${total}%"
+          if [ "$(printf '%.0f' "$total")" != "100" ]; then
+            echo "::error::cmd coverage below 100% (got ${total}%)"
+            go tool cover -func=coverage-cmd.out | grep -v "100.0%"
+            exit 1
+          fi
 
       - name: Cross-compile smoke
         run: |
