@@ -7,6 +7,7 @@ package painter
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -138,9 +139,37 @@ func TestCellPainterWriteANSI(t *testing.T) {
 	if !strings.Contains(s, "\x1b[38;2;") || !strings.Contains(s, "\x1b[48;2;") {
 		t.Fatalf("ANSI output missing truecolor sequences: %q", s)
 	}
-	// row terminator
-	if !strings.Contains(s, "\x1b[0m\n") {
-		t.Fatalf("ANSI output missing row reset")
+	// each row is prefixed with absolute cursor-position + terminated
+	// with SGR reset — the LF+CR form was removed in v0.1.1 because
+	// raw-mode Terminal.app (ONLCR off) treats LF as row-only and
+	// left rows 1..N landing at the wrapped column of the prior row.
+	if !strings.Contains(s, "\x1b[1;1H") {
+		t.Fatalf("ANSI output missing row-1 cursor prefix: %q", s)
+	}
+	if !strings.Contains(s, "\x1b[0m") {
+		t.Fatalf("ANSI output missing SGR reset: %q", s)
+	}
+	if strings.Contains(s, "\n") {
+		t.Fatalf("ANSI output must not emit bare LF (breaks raw-mode terminals): %q", s)
+	}
+}
+
+// Regression for the v0.1.0 raw-mode bug: emit N rows and verify each
+// starts with `\x1b[<n>;1H`. A frame decoded from this stream must land
+// row-K content on terminal row K, not K*2 or wrapped-offsets.
+func TestCellPainterWriteANSIPositionsEveryRowAtColumn1(t *testing.T) {
+	p := NewCellPainter(3, 4)
+	p.Text(0, 0, "aaa", RGB(0xFF, 0, 0))
+	p.Text(0, 1, "bbb", RGB(0xFF, 0, 0))
+	p.Text(0, 2, "ccc", RGB(0xFF, 0, 0))
+	p.Text(0, 3, "ddd", RGB(0xFF, 0, 0))
+	var buf bytes.Buffer
+	_, _ = p.WriteANSI(&buf)
+	s := buf.String()
+	for row := 1; row <= 4; row++ {
+		if !strings.Contains(s, fmt.Sprintf("\x1b[%d;1H", row)) {
+			t.Fatalf("row %d cursor prefix missing", row)
+		}
 	}
 }
 

@@ -134,12 +134,16 @@ func (p *CellPainter) setFg(x, y int, r rune, fg RGBA) {
 }
 
 // WriteANSI serializes the grid as a single ANSI-encoded string
-// (24-bit truecolor). One escape sequence per cell; the terminal
-// renders it verbatim. A trailing reset (`\x1b[0m`) is emitted at
-// the end + a newline is emitted between rows.
+// (24-bit truecolor). Each row is prefixed with `\x1b[<y+1>;1H` so
+// it starts at column 1 of its own row regardless of terminal wrap /
+// raw-mode CR handling — the previous `\n`-only terminator broke in
+// raw-mode Terminal.app (ONLCR off): LF alone doesn't reset column,
+// so rows 1..N would be written to wrapped positions and the frame
+// would end up blank except for the last row.
 func (p *CellPainter) WriteANSI(w io.Writer) (int, error) {
 	var buf bytes.Buffer
 	for y := 0; y < p.H; y++ {
+		fmt.Fprintf(&buf, "\x1b[%d;1H", y+1)
 		for x := 0; x < p.W; x++ {
 			c := p.Cells[y*p.W+x]
 			// truecolor fg + bg + rune
@@ -150,7 +154,7 @@ func (p *CellPainter) WriteANSI(w io.Writer) (int, error) {
 				c.Rune,
 			)
 		}
-		buf.WriteString("\x1b[0m\n")
+		buf.WriteString("\x1b[0m")
 	}
 	return w.Write(buf.Bytes())
 }
