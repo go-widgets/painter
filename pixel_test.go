@@ -32,6 +32,40 @@ func TestPixelPainterPutPixel(t *testing.T) {
 	}
 }
 
+func TestPixelPainterPutPixelAlphaBlend(t *testing.T) {
+	p := newPixel(1, 1)
+	// Seed an opaque white destination.
+	p.PutPixel(0, 0, RGB(0xFF, 0xFF, 0xFF))
+	// Paint 12%-black (WhiteSur borders rgba(0,0,0,0.12) => A≈30) over it.
+	p.PutPixel(0, 0, RGBA{R: 0, G: 0, B: 0, A: 30})
+	// out = 0*30/255 + 255*225/255 = 225 (rounded), alpha stays opaque.
+	want := uint8((0*30 + 255*225 + 127) / 255) // 225
+	if p.Buf[0] != want || p.Buf[1] != want || p.Buf[2] != want {
+		t.Fatalf("blended RGB = %v, want (%d,%d,%d)", p.Buf[0:3], want, want, want)
+	}
+	if p.Buf[3] != 0xFF {
+		t.Fatalf("blended over opaque should stay opaque, alpha = %d", p.Buf[3])
+	}
+}
+
+func TestPixelPainterPutPixelFullyTransparentNoOp(t *testing.T) {
+	p := newPixel(1, 1)
+	p.PutPixel(0, 0, RGB(0x11, 0x22, 0x33)) // opaque seed
+	p.PutPixel(0, 0, RGBA{R: 0xAA, G: 0xBB, B: 0xCC, A: 0})
+	if p.Buf[0] != 0x11 || p.Buf[1] != 0x22 || p.Buf[2] != 0x33 || p.Buf[3] != 0xFF {
+		t.Fatalf("A=0 must be a no-op, got %v", p.Buf[0:4])
+	}
+}
+
+func TestPixelPainterPutPixelBlendOverEmpty(t *testing.T) {
+	// Blending over a transparent (A=0) destination: out alpha = src alpha.
+	p := newPixel(1, 1)
+	p.PutPixel(0, 0, RGBA{R: 0x40, G: 0x80, B: 0xC0, A: 128})
+	if p.Buf[3] != 128 {
+		t.Fatalf("out alpha over empty = %d, want 128", p.Buf[3])
+	}
+}
+
 func TestPixelPainterPutPixelOutOfBoundsDropped(t *testing.T) {
 	p := newPixel(2, 2)
 	// each of these must be a no-op — no panic, no write outside buf

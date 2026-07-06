@@ -62,6 +62,16 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 
 // PutPixel writes one RGBA at (x, y). Out-of-bounds writes are
 // silently dropped.
+//
+// Semi-transparent colours are src-over composited onto the existing
+// pixel, so a theme colour like WhiteSur's borders rgba(0,0,0,0.12)
+// paints as a subtle 12%-black hairline instead of a harsh opaque line.
+// The two common cases stay exact and allocation-free:
+//   - A == 0xFF (the vast majority of widget paint) overwrites verbatim,
+//     so opaque rendering is byte-identical to before.
+//   - A == 0 (fully transparent) is a no-op.
+// Compositing over an opaque destination yields an opaque result, so a
+// surface stays fully opaque for the host compositor.
 func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 	if x < 0 || y < 0 || x >= p.Width || y >= p.Height {
 		return
@@ -70,10 +80,25 @@ func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 	if off < 0 || off+3 >= len(p.Buf) {
 		return
 	}
-	p.Buf[off] = c.R
-	p.Buf[off+1] = c.G
-	p.Buf[off+2] = c.B
-	p.Buf[off+3] = c.A
+	if c.A == 0xFF {
+		p.Buf[off] = c.R
+		p.Buf[off+1] = c.G
+		p.Buf[off+2] = c.B
+		p.Buf[off+3] = 0xFF
+		return
+	}
+	if c.A == 0 {
+		return
+	}
+	// src-over: out = src*a + dst*(1-a), rounded. Alpha byte too so the
+	// result over an opaque ground stays opaque.
+	a := uint32(c.A)
+	ia := 255 - a
+	blend := func(src, dst uint8) uint8 { return uint8((uint32(src)*a + uint32(dst)*ia + 127) / 255) }
+	p.Buf[off] = blend(c.R, p.Buf[off])
+	p.Buf[off+1] = blend(c.G, p.Buf[off+1])
+	p.Buf[off+2] = blend(c.B, p.Buf[off+2])
+	p.Buf[off+3] = uint8(a + uint32(p.Buf[off+3])*ia/255)
 }
 
 // Text paints s at (x, y) using the built-in 5×7 bitmap font (see
