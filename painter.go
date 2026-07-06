@@ -82,6 +82,17 @@ type Painter interface {
 	// (a cell grid, for instance) ignore it.
 	StrokeRect(r Rect, c RGBA, lineW int)
 
+	// FillRoundRect fills r with the corners rounded to the given
+	// radius (in painter units). radius is clamped to half the
+	// smaller side. Pixel back-ends anti-alias the corners; back-ends
+	// that can't round (a cell grid) fall back to a square FillRect.
+	FillRoundRect(r Rect, radius int, c RGBA)
+
+	// StrokeRoundRect paints a 1-unit rounded border around r. Like
+	// StrokeRect, lineW is a hint; non-rounding back-ends fall back to
+	// a square StrokeRect.
+	StrokeRoundRect(r Rect, radius int, c RGBA, lineW int)
+
 	// PutPixel paints a single pixel at (x, y). On a CellPainter
 	// this promotes to a filled cell.
 	PutPixel(x, y int, c RGBA)
