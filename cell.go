@@ -81,6 +81,19 @@ func (p *CellPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 	_ = lineW
 }
 
+// FillRoundRect can't round on a cell grid (a cell is atomic), so it
+// falls back to a square FillRect -- the rounding is a no-op here.
+func (p *CellPainter) FillRoundRect(r Rect, radius int, c RGBA) {
+	_ = radius
+	p.FillRect(r, c)
+}
+
+// StrokeRoundRect falls back to the square box-draw StrokeRect on a cell grid.
+func (p *CellPainter) StrokeRoundRect(r Rect, radius int, c RGBA, lineW int) {
+	_ = radius
+	p.StrokeRect(r, c, lineW)
+}
+
 // PutPixel paints a single cell as a filled block character. Useful
 // for pixel-precise widgets that want to render "dots" on a terminal.
 func (p *CellPainter) PutPixel(x, y int, c RGBA) {
