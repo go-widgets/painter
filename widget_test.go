@@ -114,3 +114,25 @@ func hasCellRune(cp *CellPainter, r rune) bool {
 	}
 	return false
 }
+
+// TestButtonLabelCentredNotOnBorder guards the centering fix: a short
+// (3/4-tall) cell button used to render its label on the bottom border row
+// ("└─OK──┘") because Draw placed the text at Y+2. It must now sit on the
+// vertical centre row and leave the bottom border intact.
+func TestButtonLabelCentredNotOnBorder(t *testing.T) {
+	const w, h = 20, 4
+	cp := NewCellPainter(w, h)
+	b := &Button{Bounds: Rect{0, 0, w, h}, Label: "OK"}
+	b.Draw(cp, LightTheme())
+	// Centre row = (H-1)/2 = 1; label starts at X+2 = 2.
+	if got := cp.Cells[1*w+2].Rune; got != 'O' {
+		t.Errorf("centre-row label (2,1) = %q, want 'O'", got)
+	}
+	if got := cp.Cells[1*w+3].Rune; got != 'K' {
+		t.Errorf("centre-row label (3,1) = %q, want 'K'", got)
+	}
+	// The bottom border row must carry box-draw, not the label.
+	if got := cp.Cells[(h-1)*w+2].Rune; got == 'O' || got == 'K' {
+		t.Errorf("bottom border row (2,%d) still holds the label: %q", h-1, got)
+	}
+}
