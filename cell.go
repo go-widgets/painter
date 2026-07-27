@@ -31,7 +31,17 @@ type CellPainter struct {
 	W     int
 	H     int
 	Cells []Cell
+
+	// clip confines writes to the top rect (empty = whole grid). See Clipper.
+	clip []Rect
 }
+
+// PushClip confines subsequent writes to r (intersected with any enclosing
+// clip). Implements Clipper.
+func (p *CellPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, r) }
+
+// PopClip removes the most recent PushClip. Implements Clipper.
+func (p *CellPainter) PopClip() { p.clip = popClip(p.clip) }
 
 // NewCellPainter builds a fresh painter over an allocated grid. The
 // grid is initialized to space + black on black — the widget draws
@@ -120,12 +130,18 @@ func (p *CellPainter) set(x, y int, r rune, fg, bg RGBA) {
 	if x < 0 || y < 0 || x >= p.W || y >= p.H {
 		return
 	}
+	if !clipAllows(p.clip, x, y) {
+		return
+	}
 	p.Cells[y*p.W+x] = Cell{Rune: r, Fg: fg, Bg: bg}
 }
 
 // setFg writes a rune + fg without touching the existing bg.
 func (p *CellPainter) setFg(x, y int, r rune, fg RGBA) {
 	if x < 0 || y < 0 || x >= p.W || y >= p.H {
+		return
+	}
+	if !clipAllows(p.clip, x, y) {
 		return
 	}
 	c := &p.Cells[y*p.W+x]
