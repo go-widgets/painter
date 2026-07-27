@@ -21,7 +21,18 @@ type PixelPainter struct {
 
 	// Height is the number of rows.
 	Height int
+
+	// clip is the active clip stack; the top rect confines every write. Empty
+	// means the whole surface. Managed via PushClip / PopClip.
+	clip []Rect
 }
+
+// PushClip confines subsequent drawing to r (intersected with any enclosing
+// clip). Implements Clipper.
+func (p *PixelPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, r) }
+
+// PopClip removes the most recent PushClip. Implements Clipper.
+func (p *PixelPainter) PopClip() { p.clip = popClip(p.clip) }
 
 // NewPixelPainter builds a fresh painter over an already-allocated
 // buffer. The buffer must be exactly `4*width*height` bytes; a
@@ -53,7 +64,10 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 		p.PutPixel(x, r.Y, c)
 		p.PutPixel(x, r.Y+r.H-1, c)
 	}
-	for y := r.Y; y < r.Y+r.H; y++ {
+	// Skip the corner rows here — the horizontal runs above already painted the
+	// four corner pixels. Painting them again double-composites a translucent
+	// stroke, darkening the corners relative to the edges.
+	for y := r.Y + 1; y < r.Y+r.H-1; y++ {
 		p.PutPixel(r.X, y, c)
 		p.PutPixel(r.X+r.W-1, y, c)
 	}
@@ -70,10 +84,14 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 //   - A == 0xFF (the vast majority of widget paint) overwrites verbatim,
 //     so opaque rendering is byte-identical to before.
 //   - A == 0 (fully transparent) is a no-op.
+//
 // Compositing over an opaque destination yields an opaque result, so a
 // surface stays fully opaque for the host compositor.
 func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 	if x < 0 || y < 0 || x >= p.Width || y >= p.Height {
+		return
+	}
+	if !clipAllows(p.clip, x, y) {
 		return
 	}
 	off := (y*p.Width + x) * 4
