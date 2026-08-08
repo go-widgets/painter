@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -56,6 +57,11 @@ jobs:
             go tool cover -func=coverage-cmd.out | grep -v "100.0%"
             exit 1
           fi
+
+      - name: Race detector (CGO on, for -race only)
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race $(go list ./... | grep -v '/cmd/')
 
       - name: Cross-compile smoke (all 6 64-bit arches + wasm + darwin)
         run: |
