@@ -2,3 +2,8 @@
 wui-wasm.wasm
 wasm_exec.js
 site/
+
+# Go test / profiling artefacts.
+*.test
+*.prof
+coverage*.out

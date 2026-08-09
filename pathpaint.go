@@ -4,10 +4,7 @@
 
 package painter
 
-import (
-	"math"
-	"sort"
-)
+import "math"
 
 // PixelPainter is a PathPainter: it rasterises arbitrary outlines with an
 // anti-aliased scanline coverage accumulator, the same fractional-coverage idea
@@ -43,7 +40,8 @@ func (p *PixelPainter) FillPath(pth *Path, c RGBA, rule FillRule) {
 	if !ok {
 		return
 	}
-	cov := coverGrid(edges, rule, ox, oy, w, h, pathSS)
+	cov := p.covScratch(w * h)
+	p.pathXS = coverInto(cov, edges, rule, ox, oy, w, h, pathSS, p.pathXS[:0])
 	p.composite(cov, ox, oy, w, h, c)
 }
 
@@ -79,16 +77,71 @@ func (p *PixelPainter) StrokePath(pth *Path, c RGBA, width float64) {
 	if !ok {
 		return
 	}
-	cov := make([]float64, w*h)
+	cov := p.covScratch(w * h)
 	for _, s := range segs {
-		if re := segRectEdges(s.x0, s.y0, s.x1, s.y1, hw); re != nil {
-			maxInto(cov, coverGrid(re, NonZero, ox, oy, w, h, pathSS))
+		re := segRectEdges(s.x0, s.y0, s.x1, s.y1, hw)
+		if re == nil {
+			continue
 		}
+		// Rasterise this segment's rectangle over its OWN clamped sub-box (a
+		// small fraction of the whole stroke box) into a reusable temp, then
+		// union it into the accumulator by per-pixel MAX. Coverage is computed
+		// from absolute pixel positions, so a sub-box gives values identical to
+		// the full box; pixels outside it contribute zero to the MAX.
+		rminX, rminY, rmaxX, rmaxY := edgeBounds(re)
+		sox, soy, sw, sh, ok := subBox(rminX, rminY, rmaxX, rmaxY, ox, oy, w, h)
+		if !ok {
+			continue
+		}
+		tmp := p.tmpScratch(sw * sh)
+		p.pathXS = coverInto(tmp, re, NonZero, sox, soy, sw, sh, pathSS, p.pathXS[:0])
+		maxSub(cov, w, tmp, sox-ox, soy-oy, sw, sh)
 	}
 	for _, v := range verts {
 		diskMax(cov, ox, oy, w, h, v.x, v.y, hw)
 	}
 	p.composite(cov, ox, oy, w, h, c)
+}
+
+// subBox intersects a float bounding box with the integer box [ox,oy,w,h],
+// returning the clamped integer sub-box origin/extent and ok=false when the
+// overlap is empty.
+func subBox(minX, minY, maxX, maxY float64, ox, oy, w, h int) (sox, soy, sw, sh int, ok bool) {
+	sox = int(math.Floor(minX))
+	soy = int(math.Floor(minY))
+	sx1 := int(math.Ceil(maxX))
+	sy1 := int(math.Ceil(maxY))
+	if sox < ox {
+		sox = ox
+	}
+	if soy < oy {
+		soy = oy
+	}
+	if sx1 > ox+w {
+		sx1 = ox + w
+	}
+	if sy1 > oy+h {
+		sy1 = oy + h
+	}
+	sw, sh = sx1-sox, sy1-soy
+	if sw <= 0 || sh <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	return sox, soy, sw, sh, true
+}
+
+// maxSub merges the sw*sh coverage tile src into the dstW-wide accumulator dst
+// at offset (dx, dy) by per-pixel maximum (a coverage union over a sub-region).
+func maxSub(dst []float64, dstW int, src []float64, dx, dy, sw, sh int) {
+	for j := 0; j < sh; j++ {
+		drow := dst[(dy+j)*dstW+dx : (dy+j)*dstW+dx+sw]
+		srow := src[j*sw : j*sw+sw]
+		for i, v := range srow {
+			if v > drow[i] {
+				drow[i] = v
+			}
+		}
+	}
 }
 
 // pathBox turns a float bounding box into an integer sub-box clamped to the
@@ -118,11 +171,45 @@ func (p *PixelPainter) pathBox(minX, minY, maxX, maxY float64) (ox, oy, w, h int
 }
 
 // composite writes a coverage grid (w*h, values 0..1) at origin (ox, oy) into
-// the buffer, scaling c.A by coverage. Clip + bounds are honoured by PutPixel.
+// the buffer, scaling c.A by coverage. The clip + surface intersection is taken
+// ONCE up front so the inner loop carries no per-pixel bounds/clip branch and no
+// PutPixel call — every visited pixel is already known drawable; the result is
+// byte-identical to PutPixel-per-pixel (pixels PutPixel would have dropped fall
+// outside the intersected region).
 func (p *PixelPainter) composite(cov []float64, ox, oy, w, h int, c RGBA) {
-	for j := 0; j < h; j++ {
-		for i := 0; i < w; i++ {
-			a := cov[j*w+i]
+	// Visible box = grid ∩ surface ∩ top clip, in absolute pixel coordinates.
+	x0, y0, x1, y1 := ox, oy, ox+w, oy+h
+	if x0 < 0 {
+		x0 = 0
+	}
+	if y0 < 0 {
+		y0 = 0
+	}
+	if x1 > p.Width {
+		x1 = p.Width
+	}
+	if y1 > p.Height {
+		y1 = p.Height
+	}
+	if n := len(p.clip); n > 0 {
+		r := p.clip[n-1]
+		if r.X > x0 {
+			x0 = r.X
+		}
+		if r.Y > y0 {
+			y0 = r.Y
+		}
+		if r.X+r.W < x1 {
+			x1 = r.X + r.W
+		}
+		if r.Y+r.H < y1 {
+			y1 = r.Y + r.H
+		}
+	}
+	for y := y0; y < y1; y++ {
+		crow := cov[(y-oy)*w : (y-oy)*w+w] // this row's coverage; crow[x-ox] = col x
+		for x := x0; x < x1; x++ {
+			a := crow[x-ox]
 			if a <= 0 {
 				continue
 			}
@@ -134,7 +221,11 @@ func (p *PixelPainter) composite(cov []float64, ox, oy, w, h int, c RGBA) {
 			if col.A == 0 {
 				continue
 			}
-			p.PutPixel(ox+i, oy+j, col)
+			off := (y*p.Width + x) * 4
+			if off+3 >= len(p.Buf) {
+				continue // degenerate under-sized buffer; PutPixel drops these too
+			}
+			p.blendInto(off, col)
 		}
 	}
 }
@@ -161,12 +252,22 @@ func fillEdges(subs []subpath) []edge {
 
 // coverGrid returns per-pixel coverage (0..1) of the region enclosed by edges
 // under rule, over the integer box [ox,oy,w,h], sampling ss vertical
-// sub-scanlines per row with analytic horizontal coverage.
+// sub-scanlines per row with analytic horizontal coverage. It allocates the
+// grid; the hot render paths call coverInto with a reusable scratch instead.
 func coverGrid(edges []edge, rule FillRule, ox, oy, w, h, ss int) []float64 {
 	cov := make([]float64, w*h)
+	coverInto(cov, edges, rule, ox, oy, w, h, ss, nil)
+	return cov
+}
+
+// coverInto accumulates per-pixel coverage (0..1) of the region enclosed by
+// edges under rule INTO cov (row-major w*h, caller-zeroed) over the integer box
+// [ox,oy,w,h], sampling ss vertical sub-scanlines per row with analytic
+// horizontal coverage. xs is a scratch crossings buffer whose grown backing is
+// returned so a caller can reuse it across many calls (no per-call allocation).
+func coverInto(cov []float64, edges []edge, rule FillRule, ox, oy, w, h, ss int, xs []crossing) []crossing {
 	inv := 1.0 / float64(ss)
 	oxf := float64(ox)
-	var xs []crossing
 	for py := 0; py < h; py++ {
 		row := cov[py*w : py*w+w]
 		for s := 0; s < ss; s++ {
@@ -175,7 +276,7 @@ func coverGrid(edges []edge, rule FillRule, ox, oy, w, h, ss int) []float64 {
 			if len(xs) < 2 {
 				continue
 			}
-			sort.Slice(xs, func(i, j int) bool { return xs[i].x < xs[j].x })
+			sortCrossings(xs)
 			wind := 0
 			for i := 0; i < len(xs)-1; i++ {
 				wind += xs[i].dir
@@ -185,7 +286,24 @@ func coverGrid(edges []edge, rule FillRule, ox, oy, w, h, ss int) []float64 {
 			}
 		}
 	}
-	return cov
+	return xs
+}
+
+// sortCrossings orders a scanline's crossings by ascending x with an in-place
+// insertion sort. The list is short (a handful of edges cross any one scanline),
+// so insertion sort beats sort.Slice and — unlike it — allocates nothing (no
+// reflection, no escaping closure). Ties in x bound only a zero-width span, so
+// the sort need not be stable for the coverage to stay byte-identical.
+func sortCrossings(xs []crossing) {
+	for i := 1; i < len(xs); i++ {
+		c := xs[i]
+		j := i - 1
+		for j >= 0 && xs[j].x > c.x {
+			xs[j+1] = xs[j]
+			j--
+		}
+		xs[j+1] = c
+	}
 }
 
 // crossingsAt collects the x-crossings of every edge with the horizontal line
@@ -275,9 +393,13 @@ func diskMax(cov []float64, ox, oy, w, h int, cx, cy, r float64) {
 	if r <= 0 {
 		return
 	}
-	for j := 0; j < h; j++ {
+	// Scan only the disk's clamped bounding box; pixels beyond r+0.5 from the
+	// centre have coverage <= 0 and were skipped anyway, so the output is
+	// unchanged while a big surrounding stroke box is no longer walked in full.
+	i0, j0, i1, j1 := diskSpan(ox, oy, w, h, cx, cy, r)
+	for j := j0; j < j1; j++ {
 		py := float64(oy+j) + 0.5
-		for i := 0; i < w; i++ {
+		for i := i0; i < i1; i++ {
 			px := float64(ox+i) + 0.5
 			c := r + 0.5 - math.Hypot(px-cx, py-cy)
 			if c <= 0 {
@@ -293,13 +415,28 @@ func diskMax(cov []float64, ox, oy, w, h int, cx, cy, r float64) {
 	}
 }
 
-// maxInto merges src into dst by per-pixel maximum (a coverage union).
-func maxInto(dst, src []float64) {
-	for i, v := range src {
-		if v > dst[i] {
-			dst[i] = v
-		}
+// diskSpan returns the half-open pixel index range [i0,i1)x[j0,j1) of the disk
+// of radius r centred at (cx,cy), clamped to the box [ox,oy,w,h]. The +0.5
+// margin matches diskMax's rim: any pixel whose centre is farther than r+0.5
+// from the disk centre has zero coverage, so it need never be visited.
+func diskSpan(ox, oy, w, h int, cx, cy, r float64) (i0, j0, i1, j1 int) {
+	i0 = int(math.Floor(cx-r-0.5)) - ox
+	i1 = int(math.Ceil(cx+r+0.5)) - ox
+	j0 = int(math.Floor(cy-r-0.5)) - oy
+	j1 = int(math.Ceil(cy+r+0.5)) - oy
+	if i0 < 0 {
+		i0 = 0
 	}
+	if j0 < 0 {
+		j0 = 0
+	}
+	if i1 > w {
+		i1 = w
+	}
+	if j1 > h {
+		j1 = h
+	}
+	return
 }
 
 // edgeBounds returns the bounding box of an edge list (len >= 1 assumed).

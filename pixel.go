@@ -25,6 +25,41 @@ type PixelPainter struct {
 	// clip is the active clip stack; the top rect confines every write. Empty
 	// means the whole surface. Managed via PushClip / PopClip.
 	clip []Rect
+
+	// pathCov / pathTmp / pathXS are reusable rasteriser scratch buffers, grown
+	// on demand and reused across FillPath / StrokePath calls so a steady stream
+	// of vector draws amortises to ~zero coverage-buffer allocation. pathCov is
+	// the coverage accumulator; pathTmp is the per-stroke-segment temporary;
+	// pathXS holds a scanline's edge crossings. They carry no state between
+	// calls — each use re-zeroes / resets the region it touches.
+	pathCov []float64
+	pathTmp []float64
+	pathXS  []crossing
+}
+
+// covScratch returns pathCov resized to n float64s and zeroed, growing the
+// backing array only when the current one is too small.
+func (p *PixelPainter) covScratch(n int) []float64 {
+	if cap(p.pathCov) < n {
+		p.pathCov = make([]float64, n)
+	}
+	s := p.pathCov[:n]
+	for i := range s {
+		s[i] = 0
+	}
+	return s
+}
+
+// tmpScratch returns pathTmp resized to n float64s and zeroed (see covScratch).
+func (p *PixelPainter) tmpScratch(n int) []float64 {
+	if cap(p.pathTmp) < n {
+		p.pathTmp = make([]float64, n)
+	}
+	s := p.pathTmp[:n]
+	for i := range s {
+		s[i] = 0
+	}
+	return s
 }
 
 // PushClip confines subsequent drawing to r (intersected with any enclosing
@@ -98,6 +133,18 @@ func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 	if off < 0 || off+3 >= len(p.Buf) {
 		return
 	}
+	p.blendInto(off, c)
+}
+
+// blendInto writes c at byte offset off, which the caller has already proven is
+// in range and clip-allowed. It is the shared pixel-write core of PutPixel and
+// the path rasterizer's composite loop:
+//   - A == 0xFF overwrites verbatim (opaque paint stays byte-identical to a raw
+//     store);
+//   - A == 0 is a no-op;
+//   - otherwise src-over composites (out = src*a + dst*(1-a), rounded), alpha
+//     byte included so the result over an opaque ground stays opaque.
+func (p *PixelPainter) blendInto(off int, c RGBA) {
 	if c.A == 0xFF {
 		p.Buf[off] = c.R
 		p.Buf[off+1] = c.G
@@ -108,8 +155,6 @@ func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 	if c.A == 0 {
 		return
 	}
-	// src-over: out = src*a + dst*(1-a), rounded. Alpha byte too so the
-	// result over an opaque ground stays opaque.
 	a := uint32(c.A)
 	ia := 255 - a
 	blend := func(src, dst uint8) uint8 { return uint8((uint32(src)*a + uint32(dst)*ia + 127) / 255) }
