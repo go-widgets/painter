@@ -569,3 +569,114 @@ func TestCoverGridHorizontalEdgeSkipped(t *testing.T) {
 		}
 	}
 }
+
+func TestSubBoxClampAndEmpty(t *testing.T) {
+	// White-box for the stroke sub-box clamp: a box fully inside is returned
+	// verbatim, low/high overhangs clamp to the enclosing box, and a box with
+	// no overlap reports ok=false.
+	cases := []struct {
+		name                       string
+		minX, minY, maxX, maxY     float64
+		wantX, wantY, wantW, wantH int
+		wantOK                     bool
+	}{
+		{"inside", 2, 2, 5, 5, 2, 2, 3, 3, true},
+		{"clampLow", -3, -3, 4, 4, 0, 0, 4, 4, true},  // hits sox<ox, soy<oy
+		{"clampHigh", 6, 6, 15, 15, 6, 6, 4, 4, true}, // hits sx1>ox+w, sy1>oy+h
+		{"empty", 20, 20, 30, 30, 0, 0, 0, 0, false},  // hits sw<=0 -> !ok
+	}
+	for _, c := range cases {
+		sox, soy, sw, sh, ok := subBox(c.minX, c.minY, c.maxX, c.maxY, 0, 0, 10, 10)
+		if ok != c.wantOK {
+			t.Errorf("%s: ok = %v, want %v", c.name, ok, c.wantOK)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if sox != c.wantX || soy != c.wantY || sw != c.wantW || sh != c.wantH {
+			t.Errorf("%s: got (%d,%d,%d,%d), want (%d,%d,%d,%d)",
+				c.name, sox, soy, sw, sh, c.wantX, c.wantY, c.wantW, c.wantH)
+		}
+	}
+}
+
+func TestMaxSubMergesTileAtOffset(t *testing.T) {
+	// White-box: maxSub unions a small tile into the accumulator at an offset,
+	// keeping the per-pixel maximum and touching only the target sub-region.
+	dst := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.1, 0.1, 0.1, 0.1}
+	src := []float64{0.5, 0.2, 0.05, 0.5} // 2x2 tile
+	maxSub(dst, 3, src, 1, 1, 2, 2)
+	want := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.2, 0.1, 0.1, 0.5}
+	for i := range want {
+		if math.Abs(dst[i]-want[i]) > 1e-12 {
+			t.Errorf("dst[%d] = %v, want %v", i, dst[i], want[i])
+		}
+	}
+}
+
+func TestStrokePathOffSurfaceSegmentSkipped(t *testing.T) {
+	// A path with a segment lying entirely off the surface exercises StrokePath's
+	// subBox !ok branch: that segment contributes nothing, but the on-surface
+	// part still strokes.
+	buf := make([]byte, 4*16*16)
+	p := NewPixelPainter(buf, 16, 16)
+	pth := NewPath().MoveTo(-100, 8).LineTo(-90, 8).LineTo(8, 8)
+	p.StrokePath(pth, RGB(0xFF, 0, 0), 3)
+	if coveredArea(p) == 0 {
+		t.Fatal("on-surface part of the stroke painted nothing")
+	}
+	// The centre, on the visible segment, must be inked.
+	if alphaAt(p, 8, 8) == 0 {
+		t.Error("visible segment centre not painted")
+	}
+}
+
+func TestCompositeNegativeOriginClampsAndShortBuffer(t *testing.T) {
+	// White-box for composite's up-front intersection. A grid whose origin is
+	// off the top-left (ox,oy < 0) must clamp to the surface (exercises the
+	// x0<0 / y0<0 branches), and an under-sized buffer must drop the pixels it
+	// cannot hold (the off+3 >= len(Buf) guard) instead of panicking.
+	p := NewPixelPainter(make([]byte, 4*3*3), 3, 3)
+	cov := make([]float64, 9) // 3x3 grid at origin (-1,-1)
+	for i := range cov {
+		cov[i] = 1
+	}
+	p.composite(cov, -1, -1, 3, 3, RGB(0xFF, 0, 0))
+	// Only the on-surface part (grid cells 1..2 in each axis -> pixels 0..1) inks.
+	if alphaAt(p, 0, 0) != 0xFF {
+		t.Errorf("clamped pixel (0,0) alpha = %d, want 255", alphaAt(p, 0, 0))
+	}
+
+	// Under-sized buffer: Width/Height claim 4x4 but the buffer holds one pixel.
+	short := NewPixelPainter(make([]byte, 4), 4, 4)
+	full := make([]float64, 16)
+	for i := range full {
+		full[i] = 1
+	}
+	short.composite(full, 0, 0, 4, 4, RGB(0, 0xFF, 0)) // must not panic
+	if short.Buf[3] != 0xFF {
+		t.Errorf("in-range pixel alpha = %d, want 255", short.Buf[3])
+	}
+}
+
+func TestCompositeClipAndSurfaceEdges(t *testing.T) {
+	// White-box: a clip strictly inside the grid on all four sides fires every
+	// clip-clamp branch, and a grid extending past the right/bottom edges fires
+	// the surface-clamp branches. Only the clip∩surface∩grid cell inks.
+	p := NewPixelPainter(make([]byte, 4*8*8), 8, 8)
+	p.PushClip(Rect{X: 2, Y: 2, W: 3, H: 3}) // inside on all sides
+	cov := make([]float64, 100)              // 10x10 grid at (0,0) -> overruns 8x8
+	for i := range cov {
+		cov[i] = 1
+	}
+	p.composite(cov, 0, 0, 10, 10, RGB(0, 0, 0xFF))
+	p.PopClip()
+	// Inside the clip: inked. Outside the clip but inside surface: untouched.
+	if alphaAt(p, 3, 3) != 0xFF {
+		t.Errorf("clipped-in pixel alpha = %d, want 255", alphaAt(p, 3, 3))
+	}
+	if alphaAt(p, 6, 6) != 0 {
+		t.Errorf("clipped-out pixel alpha = %d, want 0", alphaAt(p, 6, 6))
+	}
+}
