@@ -26,6 +26,11 @@ type PixelPainter struct {
 	// means the whole surface. Managed via PushClip / PopClip.
 	clip []Rect
 
+	// off is the active translation stack; the top is added to every
+	// coordinate before it is clipped or written. Managed via
+	// PushTranslate / PopTranslate — see Translator.
+	off []offset
+
 	// pathCov / pathTmp / pathXS are reusable rasteriser scratch buffers, grown
 	// on demand and reused across FillPath / StrokePath calls so a steady stream
 	// of vector draws amortises to ~zero coverage-buffer allocation. pathCov is
@@ -64,10 +69,17 @@ func (p *PixelPainter) tmpScratch(n int) []float64 {
 
 // PushClip confines subsequent drawing to r (intersected with any enclosing
 // clip). Implements Clipper.
-func (p *PixelPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, r) }
+func (p *PixelPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, shiftRect(p.off, r)) }
 
 // PopClip removes the most recent PushClip. Implements Clipper.
 func (p *PixelPainter) PopClip() { p.clip = popClip(p.clip) }
+
+// PushTranslate shifts subsequent drawing by dx,dy, on top of any enclosing
+// translation. Implements Translator.
+func (p *PixelPainter) PushTranslate(dx, dy int) { p.off = pushOffset(p.off, dx, dy) }
+
+// PopTranslate removes the most recent PushTranslate. Implements Translator.
+func (p *PixelPainter) PopTranslate() { p.off = popOffset(p.off) }
 
 // NewPixelPainter builds a fresh painter over an already-allocated
 // buffer. The buffer must be exactly `4*width*height` bytes; a
@@ -123,6 +135,11 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 // Compositing over an opaque destination yields an opaque result, so a
 // surface stays fully opaque for the host compositor.
 func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
+	// The translation is applied HERE, in the one write every primitive
+	// funnels through — FillRect, StrokeRect and the rounded pair all reach
+	// the surface by calling this. Shifting in each public method instead
+	// would apply the offset once per layer of composition.
+	x, y = shiftPoint(p.off, x, y)
 	if x < 0 || y < 0 || x >= p.Width || y >= p.Height {
 		return
 	}
