@@ -89,13 +89,61 @@ func NewPixelPainter(buf []byte, width, height int) *PixelPainter {
 	return &PixelPainter{Buf: buf, Width: width, Height: height}
 }
 
-// FillRect fills r with c. Out-of-bounds bytes are dropped so a
-// widget that ranges past the edge doesn't panic.
+// FillRect fills r with c. Out-of-bounds bytes are dropped so a widget that
+// ranges past the edge doesn't panic.
+//
+// This is the primitive the toolkit leans on hardest -- every background, every
+// button, every table row -- and it used to be a PutPixel per pixel, which is a
+// shift, two bounds tests, a clip test and a blend each: 700,000 of them for a
+// window-sized fill. Where a fill may write is a rectangle, decided once; and
+// an opaque fill writes the SAME four bytes everywhere, so one row is built and
+// the rest of the rectangle is that row copied. A translucent fill still
+// composites pixel by pixel, because its result depends on what was underneath.
 func (p *PixelPainter) FillRect(r Rect, c RGBA) {
-	for y := r.Y; y < r.Y+r.H; y++ {
-		for x := r.X; x < r.X+r.W; x++ {
-			p.PutPixel(x, y, c)
+	if r.W <= 0 || r.H <= 0 || c.A == 0 {
+		return
+	}
+	r = shiftRect(p.off, r)
+
+	eff := intersect(r, Rect{X: 0, Y: 0, W: p.Width, H: p.Height})
+	if n := len(p.clip); n > 0 {
+		eff = intersect(eff, p.clip[n-1])
+	}
+	if eff.W <= 0 || eff.H <= 0 {
+		return
+	}
+
+	first := -1
+	for y := eff.Y; y < eff.Y+eff.H; y++ {
+		dstRow := y * p.Width * 4
+		lo, hi := dstRow+eff.X*4, dstRow+(eff.X+eff.W)*4
+		// A caller may hand over a Buf shorter than Width*Height*4, exactly as
+		// PutPixel tolerates; a row that does not fit is skipped, not fatal.
+		if hi > len(p.Buf) {
+			continue
 		}
+
+		if c.A != 0xFF {
+			for off := lo; off < hi; off += 4 {
+				p.blendInto(off, c)
+			}
+			continue
+		}
+
+		if first >= 0 {
+			copy(p.Buf[lo:hi], p.Buf[first:first+eff.W*4])
+			continue
+		}
+
+		// Build the first row by writing one pixel and doubling it: each copy
+		// moves as many bytes as are already there, so a row of N pixels costs
+		// log2(N) copies rather than N stores.
+		row := p.Buf[lo:hi]
+		row[0], row[1], row[2], row[3] = c.R, c.G, c.B, 0xFF
+		for filled := 4; filled < len(row); filled *= 2 {
+			copy(row[filled:], row[:filled])
+		}
+		first = lo
 	}
 }
 
