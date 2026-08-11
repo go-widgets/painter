@@ -44,11 +44,19 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 	}
 	dst = shiftRect(p.off, dst)
 
-	// A row can be copied wholesale when nothing has to be decided per pixel:
-	// same width as the source, entirely on the surface, no clip in force, and
-	// fully opaque. Scanning the alphas to find that out costs a quarter of the
-	// copy and saves the blend on every pixel of the row.
-	rowCopyable := dst.W == srcW && dst.X >= 0 && dst.X+dst.W <= p.Width && len(p.clip) == 0
+	// Nothing has to be decided per pixel when the row lies entirely on the
+	// surface, no clip is in force and the source row is fully opaque: what
+	// lands is the source, not a blend with what was there. Scanning the alphas
+	// to find that out costs a quarter of a copy and saves the blend on every
+	// pixel of the row.
+	plainRows := dst.X >= 0 && dst.X+dst.W <= p.Width && len(p.clip) == 0
+
+	// An enlarged image draws several destination rows from ONE source row.
+	// Building that row once and copying it to its repeats turns the cost from
+	// the destination's height into the source's -- which is the whole point of
+	// enlarging. prevRow is the byte offset of the last row produced, prevSY the
+	// source row it came from.
+	prevRow, prevSY := -1, -1
 
 	for dy := 0; dy < dst.H; dy++ {
 		y := dst.Y + dy
@@ -58,14 +66,22 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 		sy := dy * srcH / dst.H
 		srcRow := sy * srcW * 4
 		dstRow := y * p.Width * 4
+		lo, hi := dstRow+dst.X*4, dstRow+(dst.X+dst.W)*4
 
 		// The buffer bound is checked here and not with the rest of the
 		// condition because a caller may hand over a Buf shorter than
 		// Width*Height*4, exactly as PutPixel tolerates; the fast path must not
 		// be the one place that panics on it.
-		if end := dstRow + (dst.X+dst.W)*4; rowCopyable && end <= len(p.Buf) &&
-			rowOpaque(src[srcRow:srcRow+srcW*4]) {
-			copy(p.Buf[dstRow+dst.X*4:end], src[srcRow:srcRow+srcW*4])
+		if fast := plainRows && hi <= len(p.Buf) && rowOpaque(src[srcRow:srcRow+srcW*4]); fast {
+			switch {
+			case sy == prevSY && prevRow >= 0:
+				copy(p.Buf[lo:hi], p.Buf[prevRow+dst.X*4:prevRow+(dst.X+dst.W)*4])
+			case dst.W == srcW:
+				copy(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4])
+			default:
+				scaleRow(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4], srcW, dst.W)
+			}
+			prevRow, prevSY = dstRow, sy
 			continue
 		}
 
@@ -119,6 +135,15 @@ func (p *CellPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 			// of what a pixel means on a grid.
 			p.PutPixel(dst.X+dx, dst.Y+dy, c)
 		}
+	}
+}
+
+// scaleRow writes one destination row by nearest-neighbour sampling of one
+// source row. Both are RGBA, dst is dstW pixels wide and src is srcW.
+func scaleRow(dst, src []byte, srcW, dstW int) {
+	for dx := 0; dx < dstW; dx++ {
+		o := (dx * srcW / dstW) * 4
+		copy(dst[dx*4:dx*4+4], src[o:o+4])
 	}
 }
 

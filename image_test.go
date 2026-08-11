@@ -157,6 +157,43 @@ func TestDrawImageRowCopyMatchesPerPixel(t *testing.T) {
 	}
 }
 
+// Enlarging draws several destination rows from one source row, and the fast
+// path copies the row it already built instead of rebuilding it. Shrinking and
+// non-integer ratios take the same route with different arithmetic. All of them
+// must still equal what the per-pixel path produces.
+func TestDrawImageScaledFastPathMatchesPerPixel(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		srcW, srcH, dstW, dstH int
+	}{
+		{"enlarged 3x", 5, 4, 15, 12},
+		{"enlarged unevenly", 5, 4, 13, 9},
+		{"shrunk", 12, 10, 5, 3},
+		{"wider, shorter", 4, 9, 17, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := srcImage(tc.srcW, tc.srcH)
+			dst := Rect{X: 0, Y: 0, W: tc.dstW, H: tc.dstH}
+
+			fast := newPix(tc.dstW, tc.dstH)
+			fast.DrawImage(dst, src, tc.srcW, tc.srcH)
+
+			slow := newPix(tc.dstW, tc.dstH)
+			slow.PushClip(dst)
+			slow.DrawImage(dst, src, tc.srcW, tc.srcH)
+			slow.PopClip()
+
+			for i := range fast.Buf {
+				if fast.Buf[i] != slow.Buf[i] {
+					px := i / 4
+					t.Fatalf("pixel %d,%d byte %d differs: fast %d, per-pixel %d",
+						px%tc.dstW, px/tc.dstW, i%4, fast.Buf[i], slow.Buf[i])
+				}
+			}
+		})
+	}
+}
+
 // A row that is not fully opaque falls out of the fast path and composites,
 // so a translucent band over a background still blends.
 func TestDrawImageRowWithAlphaFallsOutOfTheFastPath(t *testing.T) {
@@ -211,6 +248,34 @@ func BenchmarkDrawImage(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		p.DrawImage(dst, src, 1000, 700)
+	}
+}
+
+// The enlarging case, which is what a wallpaper or a photo in a panel actually
+// does: one source row feeds several destination rows.
+func BenchmarkDrawImageScaled(b *testing.B) {
+	p := newPix(1000, 700)
+	src := srcImage(500, 350)
+	dst := Rect{X: 0, Y: 0, W: 1000, H: 700}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.DrawImage(dst, src, 500, 350)
+	}
+}
+
+func BenchmarkPerPixelBlitScaled(b *testing.B) {
+	p := newPix(1000, 700)
+	src := srcImage(500, 350)
+	var q Painter = p
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for dy := 0; dy < 700; dy++ {
+			sy := dy * 350 / 700
+			for dx := 0; dx < 1000; dx++ {
+				o := (sy*500 + dx*500/1000) * 4
+				q.PutPixel(dx, dy, RGBA{R: src[o], G: src[o+1], B: src[o+2], A: src[o+3]})
+			}
+		}
 	}
 }
 
