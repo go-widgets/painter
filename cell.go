@@ -34,14 +34,26 @@ type CellPainter struct {
 
 	// clip confines writes to the top rect (empty = whole grid). See Clipper.
 	clip []Rect
+
+	// off is the active translation stack; the top is added to every
+	// coordinate before it is clipped or written. Managed via
+	// PushTranslate / PopTranslate — see Translator.
+	off []offset
 }
 
 // PushClip confines subsequent writes to r (intersected with any enclosing
 // clip). Implements Clipper.
-func (p *CellPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, r) }
+func (p *CellPainter) PushClip(r Rect) { p.clip = pushClip(p.clip, shiftRect(p.off, r)) }
 
 // PopClip removes the most recent PushClip. Implements Clipper.
 func (p *CellPainter) PopClip() { p.clip = popClip(p.clip) }
+
+// PushTranslate shifts subsequent drawing by dx,dy, on top of any enclosing
+// translation. Implements Translator.
+func (p *CellPainter) PushTranslate(dx, dy int) { p.off = pushOffset(p.off, dx, dy) }
+
+// PopTranslate removes the most recent PushTranslate. Implements Translator.
+func (p *CellPainter) PopTranslate() { p.off = popOffset(p.off) }
 
 // NewCellPainter builds a fresh painter over an allocated grid. The
 // grid is initialized to space + black on black — the widget draws
@@ -127,6 +139,10 @@ func (p *CellPainter) Size() (int, int) { return p.W, p.H }
 // set writes a full cell (rune + fg + bg) at (x, y), skipping any
 // out-of-bounds coordinate.
 func (p *CellPainter) set(x, y int, r rune, fg, bg RGBA) {
+	// Translated here rather than in each primitive: every write funnels
+	// through set/setFg, and shifting per public method would apply the
+	// offset once per layer of composition.
+	x, y = shiftPoint(p.off, x, y)
 	if x < 0 || y < 0 || x >= p.W || y >= p.H {
 		return
 	}
@@ -138,6 +154,7 @@ func (p *CellPainter) set(x, y int, r rune, fg, bg RGBA) {
 
 // setFg writes a rune + fg without touching the existing bg.
 func (p *CellPainter) setFg(x, y int, r rune, fg RGBA) {
+	x, y = shiftPoint(p.off, x, y)
 	if x < 0 || y < 0 || x >= p.W || y >= p.H {
 		return
 	}
