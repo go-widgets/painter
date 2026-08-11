@@ -44,60 +44,59 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 	}
 	dst = shiftRect(p.off, dst)
 
-	// Nothing has to be decided per pixel when the row lies entirely on the
-	// surface, no clip is in force and the source row is fully opaque: what
-	// lands is the source, not a blend with what was there. Scanning the alphas
-	// to find that out costs a quarter of a copy and saves the blend on every
-	// pixel of the row.
-	plainRows := dst.X >= 0 && dst.X+dst.W <= p.Width && len(p.clip) == 0
+	// The surface and the clip are both rectangles, and the top of the clip
+	// stack is already the intersection of every clip in force, so where the
+	// blit may write is ONE rectangle known before the first row. Deciding it
+	// here is what lets the row paths run under a clip: testing per pixel is
+	// what used to make a clipped blit fall back to the slow loop, and a
+	// clipped blit is what a wallpaper and a scrolled page actually are.
+	eff := intersect(dst, Rect{X: 0, Y: 0, W: p.Width, H: p.Height})
+	if n := len(p.clip); n > 0 {
+		eff = intersect(eff, p.clip[n-1])
+	}
+	if eff.W <= 0 || eff.H <= 0 {
+		return
+	}
 
 	// An enlarged image draws several destination rows from ONE source row.
 	// Building that row once and copying it to its repeats turns the cost from
 	// the destination's height into the source's -- which is the whole point of
-	// enlarging. prevRow is the byte offset of the last row produced, prevSY the
+	// enlarging. prevRow is the byte offset of the last row written, prevSY the
 	// source row it came from.
 	prevRow, prevSY := -1, -1
 
-	for dy := 0; dy < dst.H; dy++ {
-		y := dst.Y + dy
-		if y < 0 || y >= p.Height {
-			continue
-		}
-		sy := dy * srcH / dst.H
+	for y := eff.Y; y < eff.Y+eff.H; y++ {
+		sy := (y - dst.Y) * srcH / dst.H
 		srcRow := sy * srcW * 4
 		dstRow := y * p.Width * 4
-		lo, hi := dstRow+dst.X*4, dstRow+(dst.X+dst.W)*4
+		lo, hi := dstRow+eff.X*4, dstRow+(eff.X+eff.W)*4
 
-		// The buffer bound is checked here and not with the rest of the
-		// condition because a caller may hand over a Buf shorter than
-		// Width*Height*4, exactly as PutPixel tolerates; the fast path must not
-		// be the one place that panics on it.
-		if fast := plainRows && hi <= len(p.Buf) && rowOpaque(src[srcRow:srcRow+srcW*4]); fast {
+		// A caller may hand over a Buf shorter than Width*Height*4, exactly as
+		// PutPixel tolerates; a row that does not fit is skipped rather than
+		// fatal.
+		if hi > len(p.Buf) {
+			continue
+		}
+
+		// A fully opaque row replaces what was underneath, so it can be written
+		// without consulting it. A row with any translucency cannot: the result
+		// depends on the ground, which differs from row to row.
+		if rowOpaque(src[srcRow : srcRow+srcW*4]) {
 			switch {
 			case sy == prevSY && prevRow >= 0:
-				copy(p.Buf[lo:hi], p.Buf[prevRow+dst.X*4:prevRow+(dst.X+dst.W)*4])
-			case dst.W == srcW:
+				copy(p.Buf[lo:hi], p.Buf[prevRow+eff.X*4:prevRow+(eff.X+eff.W)*4])
+			case dst.W == srcW && eff.X == dst.X && eff.W == dst.W:
 				copy(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4])
 			default:
-				scaleRow(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4], srcW, dst.W)
+				scaleRow(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4], srcW, dst.W, eff.X-dst.X)
 			}
 			prevRow, prevSY = dstRow, sy
 			continue
 		}
 
-		for dx := 0; dx < dst.W; dx++ {
-			x := dst.X + dx
-			if x < 0 || x >= p.Width {
-				continue
-			}
-			if !clipAllows(p.clip, x, y) {
-				continue
-			}
-			sOff := srcRow + (dx*srcW/dst.W)*4
+		for x := eff.X; x < eff.X+eff.W; x++ {
+			sOff := srcRow + ((x-dst.X)*srcW/dst.W)*4
 			dOff := dstRow + x*4
-			if dOff < 0 || dOff+3 >= len(p.Buf) {
-				continue
-			}
 			if a := src[sOff+3]; a == 0xFF {
 				copy(p.Buf[dOff:dOff+4], src[sOff:sOff+4])
 			} else if a != 0 {
@@ -106,6 +105,7 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 				})
 			}
 		}
+		prevRow, prevSY = -1, -1
 	}
 }
 
@@ -139,11 +139,13 @@ func (p *CellPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 }
 
 // scaleRow writes one destination row by nearest-neighbour sampling of one
-// source row. Both are RGBA, dst is dstW pixels wide and src is srcW.
-func scaleRow(dst, src []byte, srcW, dstW int) {
-	for dx := 0; dx < dstW; dx++ {
-		o := (dx * srcW / dstW) * 4
-		copy(dst[dx*4:dx*4+4], src[o:o+4])
+// source row. Both are RGBA. dstW is the width the image was scaled to, which
+// may be wider than dst when a clip trimmed it, so x0 says which column of that
+// scaled row dst begins at.
+func scaleRow(dst, src []byte, srcW, dstW, x0 int) {
+	for i := 0; i < len(dst)/4; i++ {
+		o := ((x0 + i) * srcW / dstW) * 4
+		copy(dst[i*4:i*4+4], src[o:o+4])
 	}
 }
 

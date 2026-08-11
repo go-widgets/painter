@@ -135,59 +135,99 @@ func TestCellPainterDrawImage(t *testing.T) {
 	c2.DrawImage(Rect{X: 0, Y: 0, W: 0, H: 1}, srcImage(1, 1), 1, 1)  // empty
 }
 
-// The row-copy fast path: same width as the source, on the surface, unclipped
-// and opaque. It must produce exactly what the per-pixel path produces — the
-// speed is worthless if the picture differs.
-func TestDrawImageRowCopyMatchesPerPixel(t *testing.T) {
-	src := srcImage(16, 4)
-
-	fast := newPix(16, 4)
-	fast.DrawImage(Rect{X: 0, Y: 0, W: 16, H: 4}, src, 16, 4)
-
-	// The same blit with a clip covering everything takes the per-pixel path.
-	slow := newPix(16, 4)
-	slow.PushClip(Rect{X: 0, Y: 0, W: 16, H: 4})
-	slow.DrawImage(Rect{X: 0, Y: 0, W: 16, H: 4}, src, 16, 4)
-	slow.PopClip()
-
-	for i := range fast.Buf {
-		if fast.Buf[i] != slow.Buf[i] {
-			t.Fatalf("byte %d differs: fast %d, per-pixel %d", i, fast.Buf[i], slow.Buf[i])
+// reference is the loop DrawImage replaced, written out. PutPixel applies the
+// clip, the translation and the blend, so this honours everything DrawImage
+// must honour -- which makes it the yardstick. Comparing the primitive against
+// a clip-forced variant of ITSELF would only prove it agrees with itself, and
+// stops proving even that once the fast paths learn to run under a clip.
+func reference(p *PixelPainter, dst Rect, src []byte, srcW, srcH int) {
+	for dy := 0; dy < dst.H; dy++ {
+		sy := dy * srcH / dst.H
+		for dx := 0; dx < dst.W; dx++ {
+			o := (sy*srcW + dx*srcW/dst.W) * 4
+			p.PutPixel(dst.X+dx, dst.Y+dy, RGBA{
+				R: src[o], G: src[o+1], B: src[o+2], A: src[o+3],
+			})
 		}
 	}
 }
 
-// Enlarging draws several destination rows from one source row, and the fast
-// path copies the row it already built instead of rebuilding it. Shrinking and
-// non-integer ratios take the same route with different arithmetic. All of them
-// must still equal what the per-pixel path produces.
-func TestDrawImageScaledFastPathMatchesPerPixel(t *testing.T) {
+// translucent copies an image and knocks a band of it down to partial alpha, so
+// the blend path is exercised on rows that the opaque fast path would take.
+func translucent(src []byte, w, h int) []byte {
+	out := append([]byte(nil), src...)
+	for y := h / 3; y < 2*h/3; y++ {
+		for x := 0; x < w; x++ {
+			out[(y*w+x)*4+3] = 128
+		}
+	}
+	return out
+}
+
+// Every route through DrawImage -- row copy, row repeat, scaled row, clipped
+// span, per-pixel blend -- must land the same pixels as the loop it replaced.
+func TestDrawImageMatchesTheLoopItReplaced(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
 		srcW, srcH, dstW, dstH int
+		dstX, dstY             int
+		clip                   *Rect
+		tx, ty                 int
+		alpha                  bool
 	}{
-		{"enlarged 3x", 5, 4, 15, 12},
-		{"enlarged unevenly", 5, 4, 13, 9},
-		{"shrunk", 12, 10, 5, 3},
-		{"wider, shorter", 4, 9, 17, 3},
+		{name: "1:1", srcW: 16, srcH: 6, dstW: 16, dstH: 6},
+		{name: "1:1 offset", srcW: 8, srcH: 4, dstW: 8, dstH: 4, dstX: 3, dstY: 2},
+		{name: "enlarged 3x", srcW: 5, srcH: 4, dstW: 15, dstH: 12},
+		{name: "enlarged unevenly", srcW: 5, srcH: 4, dstW: 13, dstH: 9},
+		{name: "shrunk", srcW: 12, srcH: 10, dstW: 5, dstH: 3},
+		{name: "wider, shorter", srcW: 4, srcH: 9, dstW: 17, dstH: 3},
+		{name: "off the left and top", srcW: 8, srcH: 6, dstW: 8, dstH: 6, dstX: -3, dstY: -2},
+		{name: "off the right and bottom", srcW: 8, srcH: 6, dstW: 8, dstH: 6, dstX: 15, dstY: 16},
+		{name: "clipped in x only", srcW: 8, srcH: 6, dstW: 16, dstH: 12, clip: &Rect{X: 4, Y: 0, W: 6, H: 20}},
+		{name: "clipped in y only", srcW: 8, srcH: 6, dstW: 16, dstH: 12, clip: &Rect{X: 0, Y: 3, W: 20, H: 5}},
+		{name: "clipped in both", srcW: 8, srcH: 6, dstW: 16, dstH: 12, clip: &Rect{X: 2, Y: 3, W: 7, H: 5}},
+		{name: "clipped away entirely", srcW: 8, srcH: 6, dstW: 8, dstH: 6, clip: &Rect{X: 40, Y: 40, W: 2, H: 2}},
+		{name: "translated", srcW: 6, srcH: 5, dstW: 12, dstH: 10, tx: 4, ty: 3},
+		{name: "translated and clipped", srcW: 6, srcH: 5, dstW: 12, dstH: 10, tx: 4, ty: 3, clip: &Rect{X: 1, Y: 1, W: 6, H: 6}},
+		{name: "translucent band", srcW: 8, srcH: 9, dstW: 8, dstH: 9, alpha: true},
+		{name: "translucent band enlarged", srcW: 8, srcH: 9, dstW: 16, dstH: 18, alpha: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			src := srcImage(tc.srcW, tc.srcH)
-			dst := Rect{X: 0, Y: 0, W: tc.dstW, H: tc.dstH}
+			if tc.alpha {
+				src = translucent(src, tc.srcW, tc.srcH)
+			}
+			dst := Rect{X: tc.dstX, Y: tc.dstY, W: tc.dstW, H: tc.dstH}
 
-			fast := newPix(tc.dstW, tc.dstH)
-			fast.DrawImage(dst, src, tc.srcW, tc.srcH)
+			run := func(f func(p *PixelPainter)) *PixelPainter {
+				p := newPix(20, 20)
+				// A non-black ground, so a blend that wrongly behaves as a copy
+				// shows up instead of hiding in zeroes.
+				p.FillRect(Rect{X: 0, Y: 0, W: 20, H: 20}, RGBA{R: 40, G: 80, B: 120, A: 255})
+				if tc.tx != 0 || tc.ty != 0 {
+					p.PushTranslate(tc.tx, tc.ty)
+				}
+				if tc.clip != nil {
+					p.PushClip(*tc.clip)
+				}
+				f(p)
+				if tc.clip != nil {
+					p.PopClip()
+				}
+				if tc.tx != 0 || tc.ty != 0 {
+					p.PopTranslate()
+				}
+				return p
+			}
 
-			slow := newPix(tc.dstW, tc.dstH)
-			slow.PushClip(dst)
-			slow.DrawImage(dst, src, tc.srcW, tc.srcH)
-			slow.PopClip()
+			got := run(func(p *PixelPainter) { p.DrawImage(dst, src, tc.srcW, tc.srcH) })
+			want := run(func(p *PixelPainter) { reference(p, dst, src, tc.srcW, tc.srcH) })
 
-			for i := range fast.Buf {
-				if fast.Buf[i] != slow.Buf[i] {
+			for i := range got.Buf {
+				if got.Buf[i] != want.Buf[i] {
 					px := i / 4
-					t.Fatalf("pixel %d,%d byte %d differs: fast %d, per-pixel %d",
-						px%tc.dstW, px/tc.dstW, i%4, fast.Buf[i], slow.Buf[i])
+					t.Fatalf("pixel %d,%d byte %d: DrawImage %d, the loop it replaced %d",
+						px%20, px/20, i%4, got.Buf[i], want.Buf[i])
 				}
 			}
 		})
@@ -276,6 +316,40 @@ func BenchmarkPerPixelBlitScaled(b *testing.B) {
 				q.PutPixel(dx, dy, RGBA{R: src[o], G: src[o+1], B: src[o+2], A: src[o+3]})
 			}
 		}
+	}
+}
+
+// A clipped blit -- what a wallpaper cropped to its bounds, or a page scrolled
+// inside a viewport, actually is. It used to fall through to the per-pixel loop
+// because the clip was tested per pixel.
+func BenchmarkDrawImageClipped(b *testing.B) {
+	p := newPix(1000, 700)
+	src := srcImage(500, 350)
+	dst := Rect{X: -100, Y: -50, W: 1200, H: 800}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.PushClip(Rect{X: 0, Y: 0, W: 1000, H: 700})
+		p.DrawImage(dst, src, 500, 350)
+		p.PopClip()
+	}
+}
+
+func BenchmarkPerPixelBlitClipped(b *testing.B) {
+	p := newPix(1000, 700)
+	src := srcImage(500, 350)
+	var q Painter = p
+	dst := Rect{X: -100, Y: -50, W: 1200, H: 800}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.PushClip(Rect{X: 0, Y: 0, W: 1000, H: 700})
+		for dy := 0; dy < dst.H; dy++ {
+			sy := dy * 350 / dst.H
+			for dx := 0; dx < dst.W; dx++ {
+				o := (sy*500 + dx*500/dst.W) * 4
+				q.PutPixel(dst.X+dx, dst.Y+dy, RGBA{R: src[o], G: src[o+1], B: src[o+2], A: src[o+3]})
+			}
+		}
+		p.PopClip()
 	}
 }
 
