@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+// The path builder + the anti-aliased scanline rasterizer moved to
+// go-gfx/gfx/vector, where they are unit-tested white-box (flatten, coverage,
+// clamp, span, disk, winding) and PROVEN pixel-identical to the pre-extraction
+// painter by a byte-for-byte parity sweep. What remains to test HERE is painter's
+// own layer: FillPath / StrokePath end-to-end through PixelPainter, the composite
+// that blends coverage into the buffer under painter's clip, and the PathPainter
+// capability wiring. These are black-box render assertions plus white-box tests
+// of composite, which is painter's alone.
+
 // alphaAt returns the destination alpha byte at (x, y) — the coverage the
 // path rasterizer composited there over the (initially transparent) buffer.
 func alphaAt(p *PixelPainter, x, y int) uint8 {
@@ -24,120 +33,6 @@ func coveredArea(p *PixelPainter) float64 {
 		sum += float64(p.Buf[i]) / 255
 	}
 	return sum
-}
-
-// --- builder + flatten -----------------------------------------------------
-
-func TestPathBuilderChaining(t *testing.T) {
-	p := NewPath().MoveTo(0, 0).LineTo(4, 0).QuadTo(4, 4, 0, 4).CubicTo(-2, 2, -2, 1, 0, 0).Close()
-	// 5 recorded commands, in order.
-	wantOps := []pathOp{opMove, opLine, opQuad, opCubic, opClose}
-	if len(p.segs) != len(wantOps) {
-		t.Fatalf("recorded %d segs, want %d", len(p.segs), len(wantOps))
-	}
-	for i, op := range wantOps {
-		if p.segs[i].op != op {
-			t.Errorf("seg %d op = %d, want %d", i, p.segs[i].op, op)
-		}
-	}
-}
-
-func TestFlattenImplicitMoveFromOrigin(t *testing.T) {
-	// A LineTo with no preceding MoveTo starts the sub-path at the origin.
-	subs := NewPath().LineTo(3, 0).flatten(flattenTol)
-	if len(subs) != 1 {
-		t.Fatalf("got %d sub-paths, want 1", len(subs))
-	}
-	if subs[0].pts[0] != (point{0, 0}) {
-		t.Errorf("implicit start = %v, want origin", subs[0].pts[0])
-	}
-}
-
-func TestFlattenQuadAndCubicImplicitStart(t *testing.T) {
-	// Quad / cubic issued first also start at the origin (exercises their
-	// ensure() branch).
-	q := NewPath().QuadTo(2, 2, 4, 0).flatten(flattenTol)
-	if q[0].pts[0] != (point{0, 0}) {
-		t.Errorf("quad implicit start = %v, want origin", q[0].pts[0])
-	}
-	c := NewPath().CubicTo(1, 3, 3, 3, 4, 0).flatten(flattenTol)
-	if c[0].pts[0] != (point{0, 0}) {
-		t.Errorf("cubic implicit start = %v, want origin", c[0].pts[0])
-	}
-}
-
-func TestFlattenCloseThenReopen(t *testing.T) {
-	// After Close the current point is the sub-path start; a following LineTo
-	// opens a fresh sub-path from there.
-	subs := NewPath().MoveTo(2, 2).LineTo(6, 2).Close().LineTo(6, 6).flatten(flattenTol)
-	if len(subs) != 2 {
-		t.Fatalf("got %d sub-paths, want 2", len(subs))
-	}
-	if !subs[0].closed {
-		t.Error("first sub-path should be closed")
-	}
-	if subs[1].pts[0] != (point{2, 2}) {
-		t.Errorf("reopened sub-path start = %v, want the closed sub-path's start (2,2)", subs[1].pts[0])
-	}
-}
-
-func TestFlattenCloseBeforeAnyPointIsNoOp(t *testing.T) {
-	subs := NewPath().Close().flatten(flattenTol)
-	if len(subs) != 0 {
-		t.Fatalf("Close on an empty path produced %d sub-paths, want 0", len(subs))
-	}
-}
-
-func TestFlattenBezierSegmentCountMonotonic(t *testing.T) {
-	// Higher curvature -> the control strays farther from the chord -> more
-	// subdivisions. Assert the flattened segment count is monotonic in curvature.
-	counts := make([]int, 0, 4)
-	for _, bow := range []float64{0.1, 2, 8, 30} {
-		pts := flattenQuad(nil, 0, 0, 10, bow, 20, 0, flattenTol, flattenMaxDepth)
-		counts = append(counts, len(pts))
-	}
-	for i := 1; i < len(counts); i++ {
-		if counts[i] < counts[i-1] {
-			t.Errorf("segment counts not monotonic: %v", counts)
-		}
-	}
-	if counts[0] != 1 {
-		t.Errorf("near-flat quad flattened to %d segments, want 1", counts[0])
-	}
-	if counts[len(counts)-1] <= counts[0] {
-		t.Errorf("high-curvature quad (%d) did not exceed low-curvature (%d)", counts[len(counts)-1], counts[0])
-	}
-
-	// Same story for a cubic.
-	lo := flattenCubic(nil, 0, 0, 4, 0.2, 16, 0.2, 20, 0, flattenTol, flattenMaxDepth)
-	hi := flattenCubic(nil, 0, 0, 4, 20, 16, -20, 20, 0, flattenTol, flattenMaxDepth)
-	if len(hi) <= len(lo) {
-		t.Errorf("cubic: high-curvature %d not > low-curvature %d", len(hi), len(lo))
-	}
-}
-
-func TestFlattenDepthGuard(t *testing.T) {
-	// A negative tolerance is never satisfied, so flattening must bottom out on
-	// the depth guard instead of recursing forever. 2^depth end-points result.
-	q := flattenQuad(nil, 0, 0, 10, 10, 20, 0, -1, 3)
-	if len(q) != 1<<3 {
-		t.Errorf("quad depth-3 produced %d segments, want %d", len(q), 1<<3)
-	}
-	c := flattenCubic(nil, 0, 0, 4, 8, 16, 8, 20, 0, -1, 3)
-	if len(c) != 1<<3 {
-		t.Errorf("cubic depth-3 produced %d segments, want %d", len(c), 1<<3)
-	}
-}
-
-func TestDistToLine(t *testing.T) {
-	// Perpendicular distance from (0,3) to the x-axis is 3.
-	if d := distToLine(0, 3, -1, 0, 1, 0); math.Abs(d-3) > 1e-9 {
-		t.Errorf("distToLine perpendicular = %v, want 3", d)
-	}
-	// Degenerate anchor (a == b): falls back to point distance (3-4-5).
-	if d := distToLine(3, 4, 0, 0, 0, 0); math.Abs(d-5) > 1e-9 {
-		t.Errorf("distToLine degenerate = %v, want 5", d)
-	}
 }
 
 // --- fill: known shapes ----------------------------------------------------
@@ -490,19 +385,9 @@ func TestPathPainterCapabilityAssertion(t *testing.T) {
 	}
 }
 
-func TestInsideRule(t *testing.T) {
-	if !insideRule(2, NonZero) || insideRule(0, NonZero) {
-		t.Error("NonZero: inside iff winding != 0")
-	}
-	if !insideRule(1, EvenOdd) || insideRule(2, EvenOdd) {
-		t.Error("EvenOdd: inside iff winding odd")
-	}
-}
-
 func TestFillPathClampsToSurface(t *testing.T) {
 	// A shape spilling past the right + bottom edges is clamped to the surface
-	// (exercises pathBox's x1>Width and y1>Height clamps) and still paints its
-	// on-screen part.
+	// and still paints its on-screen part.
 	p := newPixel(16, 16)
 	big := NewPath().MoveTo(8, 8).LineTo(40, 8).LineTo(40, 40).LineTo(8, 40).Close()
 	p.FillPath(big, RGB(0xFF, 0xFF, 0xFF), NonZero)
@@ -514,111 +399,10 @@ func TestFillPathClampsToSurface(t *testing.T) {
 	}
 }
 
-func TestCompositeClampAndZeroAlpha(t *testing.T) {
-	// White-box: a coverage > 1 clamps to full opacity; a coverage so small it
-	// rounds the scaled alpha to 0 paints nothing.
-	p := newPixel(4, 4)
-	p.composite([]float64{1.5, 0.0009}, 0, 0, 2, 1, RGB(0xFF, 0xFF, 0xFF))
-	if a := alphaAt(p, 0, 0); a != 0xFF {
-		t.Errorf("coverage 1.5 should clamp to opaque, got %d", a)
-	}
-	if a := alphaAt(p, 1, 0); a != 0 {
-		t.Errorf("coverage 0.0009 should round to nothing, got %d", a)
-	}
-}
-
-func TestAddSpanClampsAndEmpty(t *testing.T) {
-	// White-box: a span reaching past both ends of the row is clamped to it;
-	// a zero/negative-width span is dropped.
-	row := make([]float64, 4)
-	addSpan(row, -2, 6, 0, 4, 1)
-	for i, v := range row {
-		if math.Abs(v-1) > 1e-9 {
-			t.Errorf("clamped span: row[%d] = %v, want 1", i, v)
-		}
-	}
-	before := append([]float64(nil), row...)
-	addSpan(row, 3, 3, 0, 4, 1) // xb <= xa -> no-op
-	for i := range row {
-		if row[i] != before[i] {
-			t.Errorf("empty span mutated row[%d]", i)
-		}
-	}
-}
-
-func TestDiskMaxZeroRadiusNoOp(t *testing.T) {
-	// White-box: a non-positive radius disk writes nothing.
-	cov := make([]float64, 4)
-	diskMax(cov, 0, 0, 2, 2, 0.5, 0.5, 0)
-	diskMax(cov, 0, 0, 2, 2, 0.5, 0.5, -3)
-	for i, v := range cov {
-		if v != 0 {
-			t.Errorf("zero/negative-radius disk wrote cov[%d] = %v", i, v)
-		}
-	}
-}
-
-func TestCoverGridHorizontalEdgeSkipped(t *testing.T) {
-	// A purely horizontal edge crosses no scanline; a shape that is only a flat
-	// line (zero height) yields zero coverage everywhere.
-	edges := []edge{{0, 5, 10, 5}, {10, 5, 0, 5}}
-	cov := coverGrid(edges, NonZero, 0, 0, 10, 10, pathSS)
-	for _, c := range cov {
-		if c != 0 {
-			t.Fatalf("horizontal-only edges produced coverage %v", c)
-		}
-	}
-}
-
-func TestSubBoxClampAndEmpty(t *testing.T) {
-	// White-box for the stroke sub-box clamp: a box fully inside is returned
-	// verbatim, low/high overhangs clamp to the enclosing box, and a box with
-	// no overlap reports ok=false.
-	cases := []struct {
-		name                       string
-		minX, minY, maxX, maxY     float64
-		wantX, wantY, wantW, wantH int
-		wantOK                     bool
-	}{
-		{"inside", 2, 2, 5, 5, 2, 2, 3, 3, true},
-		{"clampLow", -3, -3, 4, 4, 0, 0, 4, 4, true},  // hits sox<ox, soy<oy
-		{"clampHigh", 6, 6, 15, 15, 6, 6, 4, 4, true}, // hits sx1>ox+w, sy1>oy+h
-		{"empty", 20, 20, 30, 30, 0, 0, 0, 0, false},  // hits sw<=0 -> !ok
-	}
-	for _, c := range cases {
-		sox, soy, sw, sh, ok := subBox(c.minX, c.minY, c.maxX, c.maxY, 0, 0, 10, 10)
-		if ok != c.wantOK {
-			t.Errorf("%s: ok = %v, want %v", c.name, ok, c.wantOK)
-			continue
-		}
-		if !ok {
-			continue
-		}
-		if sox != c.wantX || soy != c.wantY || sw != c.wantW || sh != c.wantH {
-			t.Errorf("%s: got (%d,%d,%d,%d), want (%d,%d,%d,%d)",
-				c.name, sox, soy, sw, sh, c.wantX, c.wantY, c.wantW, c.wantH)
-		}
-	}
-}
-
-func TestMaxSubMergesTileAtOffset(t *testing.T) {
-	// White-box: maxSub unions a small tile into the accumulator at an offset,
-	// keeping the per-pixel maximum and touching only the target sub-region.
-	dst := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.1, 0.1, 0.1, 0.1}
-	src := []float64{0.5, 0.2, 0.05, 0.5} // 2x2 tile
-	maxSub(dst, 3, src, 1, 1, 2, 2)
-	want := []float64{0.1, 0.1, 0.1, 0.1, 0.9, 0.2, 0.1, 0.1, 0.5}
-	for i := range want {
-		if math.Abs(dst[i]-want[i]) > 1e-12 {
-			t.Errorf("dst[%d] = %v, want %v", i, dst[i], want[i])
-		}
-	}
-}
-
 func TestStrokePathOffSurfaceSegmentSkipped(t *testing.T) {
-	// A path with a segment lying entirely off the surface exercises StrokePath's
-	// subBox !ok branch: that segment contributes nothing, but the on-surface
-	// part still strokes.
+	// A path with a segment lying entirely off the surface exercises the
+	// rasterizer's off-surface skip: that segment contributes nothing, but the
+	// on-surface part still strokes.
 	buf := make([]byte, 4*16*16)
 	p := NewPixelPainter(buf, 16, 16)
 	pth := NewPath().MoveTo(-100, 8).LineTo(-90, 8).LineTo(8, 8)
@@ -629,6 +413,21 @@ func TestStrokePathOffSurfaceSegmentSkipped(t *testing.T) {
 	// The centre, on the visible segment, must be inked.
 	if alphaAt(p, 8, 8) == 0 {
 		t.Error("visible segment centre not painted")
+	}
+}
+
+// --- composite (painter's own layer) --------------------------------------
+
+func TestCompositeClampAndZeroAlpha(t *testing.T) {
+	// White-box: a coverage > 1 clamps to full opacity; a coverage so small it
+	// rounds the scaled alpha to 0 paints nothing.
+	p := newPixel(4, 4)
+	p.composite([]float64{1.5, 0.0009}, 0, 0, 2, 1, RGB(0xFF, 0xFF, 0xFF))
+	if a := alphaAt(p, 0, 0); a != 0xFF {
+		t.Errorf("coverage 1.5 should clamp to opaque, got %d", a)
+	}
+	if a := alphaAt(p, 1, 0); a != 0 {
+		t.Errorf("coverage 0.0009 should round to nothing, got %d", a)
 	}
 }
 

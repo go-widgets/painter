@@ -4,6 +4,8 @@
 
 package painter
 
+import "github.com/go-gfx/gfx/vector"
+
 // PixelPainter writes the primitive set into an RGBA byte buffer —
 // the deployment target for the WUI (browser canvas + putImageData)
 // and GUI (native window that consumes a []byte) families. The
@@ -31,40 +33,13 @@ type PixelPainter struct {
 	// PushTranslate / PopTranslate — see Translator.
 	off []offset
 
-	// pathCov / pathTmp / pathXS are reusable rasteriser scratch buffers, grown
-	// on demand and reused across FillPath / StrokePath calls so a steady stream
-	// of vector draws amortises to ~zero coverage-buffer allocation. pathCov is
-	// the coverage accumulator; pathTmp is the per-stroke-segment temporary;
-	// pathXS holds a scanline's edge crossings. They carry no state between
-	// calls — each use re-zeroes / resets the region it touches.
-	pathCov []float64
-	pathTmp []float64
-	pathXS  []crossing
-}
-
-// covScratch returns pathCov resized to n float64s and zeroed, growing the
-// backing array only when the current one is too small.
-func (p *PixelPainter) covScratch(n int) []float64 {
-	if cap(p.pathCov) < n {
-		p.pathCov = make([]float64, n)
-	}
-	s := p.pathCov[:n]
-	for i := range s {
-		s[i] = 0
-	}
-	return s
-}
-
-// tmpScratch returns pathTmp resized to n float64s and zeroed (see covScratch).
-func (p *PixelPainter) tmpScratch(n int) []float64 {
-	if cap(p.pathTmp) < n {
-		p.pathTmp = make([]float64, n)
-	}
-	s := p.pathTmp[:n]
-	for i := range s {
-		s[i] = 0
-	}
-	return s
+	// rz is the go-gfx/gfx/vector rasterizer that turns FillPath / StrokePath
+	// outlines into per-pixel coverage. It owns reusable scratch (the coverage
+	// accumulator, a per-stroke-segment temporary, and a scanline crossings
+	// list), so a steady stream of vector draws amortises to ~zero
+	// coverage-buffer allocation. It carries no state between calls; the painter
+	// consumes each returned coverage grid immediately in composite.
+	rz vector.Rasterizer
 }
 
 // PushClip confines subsequent drawing to r (intersected with any enclosing
