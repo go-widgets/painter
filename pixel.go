@@ -130,6 +130,25 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 	if r.W <= 0 || r.H <= 0 {
 		return
 	}
+	// lineW concentric outlines, drawn INWARD from r's edge: the border stays
+	// inside the rect it frames, which is what a widget laying out to its own
+	// bounds needs. It was ignored here until now -- accepted and discarded --
+	// so every caller asking for a thicker border silently got one pixel, and a
+	// toolkit could not scale its chrome for a HiDPI screen.
+	if lineW < 1 {
+		lineW = 1
+	}
+	for i := 0; i < lineW; i++ {
+		in := Rect{X: r.X + i, Y: r.Y + i, W: r.W - 2*i, H: r.H - 2*i}
+		if in.W <= 0 || in.H <= 0 {
+			return // the rings met in the middle; anything further is outside
+		}
+		p.strokeOutline(in, c)
+	}
+}
+
+// strokeOutline paints the one-pixel outline of r.
+func (p *PixelPainter) strokeOutline(r Rect, c RGBA) {
 	for x := r.X; x < r.X+r.W; x++ {
 		p.PutPixel(x, r.Y, c)
 		p.PutPixel(x, r.Y+r.H-1, c)
@@ -141,7 +160,6 @@ func (p *PixelPainter) StrokeRect(r Rect, c RGBA, lineW int) {
 		p.PutPixel(r.X, y, c)
 		p.PutPixel(r.X+r.W-1, y, c)
 	}
-	_ = lineW // hint; not used at 1 px
 }
 
 // PutPixel writes one RGBA at (x, y). Out-of-bounds writes are
