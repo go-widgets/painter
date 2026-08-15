@@ -40,13 +40,30 @@ func (p *PixelPainter) FillRoundRect(r Rect, radius int, c RGBA) {
 // StrokeRoundRect paints a 1-pixel rounded border around r. The straight runs
 // are crisp 1-px lines; the four corners are an anti-aliased quarter-ring.
 func (p *PixelPainter) StrokeRoundRect(r Rect, radius int, c RGBA, lineW int) {
-	_ = lineW // 1-px hint; matches StrokeRect
 	if r.W <= 0 || r.H <= 0 {
 		return
 	}
+	// lineW concentric rings, inward, each with one less radius so the corners
+	// stay concentric rather than fanning out. Like StrokeRect, this used to be
+	// discarded, so a caller asking for a thicker rounded border got a hairline.
+	if lineW < 1 {
+		lineW = 1
+	}
+	for i := 1; i < lineW; i++ {
+		in := Rect{X: r.X + i, Y: r.Y + i, W: r.W - 2*i, H: r.H - 2*i}
+		if in.W <= 0 || in.H <= 0 {
+			break
+		}
+		p.strokeRoundOutline(in, radius-i, c)
+	}
+	p.strokeRoundOutline(r, radius, c)
+}
+
+// strokeRoundOutline paints the one-pixel rounded outline of r.
+func (p *PixelPainter) strokeRoundOutline(r Rect, radius int, c RGBA) {
 	rad := clampRadius(radius, r)
 	if rad <= 0 {
-		p.StrokeRect(r, c, lineW)
+		p.strokeOutline(r, c)
 		return
 	}
 	// Straight edges (between the corner arcs).
