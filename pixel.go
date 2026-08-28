@@ -22,6 +22,10 @@ type PixelPainter struct {
 	// Height is the number of rows.
 	Height int
 
+	// swap writes BLUE where red goes and red where blue goes. See
+	// [NewPixelPainterBGRA].
+	swap bool
+
 	// clip is the active clip stack; the top rect confines every write. Empty
 	// means the whole surface. Managed via PushClip / PopClip.
 	clip []Rect
@@ -89,6 +93,35 @@ func NewPixelPainter(buf []byte, width, height int) *PixelPainter {
 	return &PixelPainter{Buf: buf, Width: width, Height: height}
 }
 
+// NewPixelPainterBGRA is [NewPixelPainter] for a buffer whose pixels are BLUE,
+// green, red, alpha -- the order a screen capture, a video frame and several
+// native surfaces arrive in.
+//
+// It exists because the alternative is worse in every direction. A consumer
+// drawing widgets over captured pixels can swap the CAPTURE, which is the
+// largest thing in the frame and the one part that must not be copied twice; or
+// it can hand every colour in the theme over pre-swapped, which is dozens of
+// values and one forgotten one away from a wrong colour nobody traces back.
+// Swapping here costs two byte stores per pixel WRITTEN, and a widget writes a
+// small part of a frame.
+//
+// Measured in go-xrkit/desk: its canvas holds BGRA because ScreenCaptureKit
+// hands over BGRA and the frame is swapped once on the way to the window. Every
+// overlay the toolkit drew into it -- the screen number, the gallery marks, the
+// application tiles -- came out with red and blue exchanged, so the orange
+// selection ring was blue on the glasses.
+func NewPixelPainterBGRA(buf []byte, width, height int) *PixelPainter {
+	return &PixelPainter{Buf: buf, Width: width, Height: height, swap: true}
+}
+
+// order returns the three colour bytes in the order this painter writes them.
+func (p *PixelPainter) order(c RGBA) (b0, b1, b2 uint8) {
+	if p.swap {
+		return c.B, c.G, c.R
+	}
+	return c.R, c.G, c.B
+}
+
 // FillRect fills r with c. Out-of-bounds bytes are dropped so a widget that
 // ranges past the edge doesn't panic.
 //
@@ -139,7 +172,8 @@ func (p *PixelPainter) FillRect(r Rect, c RGBA) {
 		// moves as many bytes as are already there, so a row of N pixels costs
 		// log2(N) copies rather than N stores.
 		row := p.Buf[lo:hi]
-		row[0], row[1], row[2], row[3] = c.R, c.G, c.B, 0xFF
+		b0, b1, b2 := p.order(c)
+		row[0], row[1], row[2], row[3] = b0, b1, b2, 0xFF
 		for filled := 4; filled < len(row); filled *= 2 {
 			copy(row[filled:], row[:filled])
 		}
@@ -210,10 +244,11 @@ func (p *PixelPainter) PutPixel(x, y int, c RGBA) {
 //   - otherwise src-over composites (out = src*a + dst*(1-a), rounded), alpha
 //     byte included so the result over an opaque ground stays opaque.
 func (p *PixelPainter) blendInto(off int, c RGBA) {
+	b0, b1, b2 := p.order(c)
 	if c.A == 0xFF {
-		p.Buf[off] = c.R
-		p.Buf[off+1] = c.G
-		p.Buf[off+2] = c.B
+		p.Buf[off] = b0
+		p.Buf[off+1] = b1
+		p.Buf[off+2] = b2
 		p.Buf[off+3] = 0xFF
 		return
 	}
@@ -223,9 +258,9 @@ func (p *PixelPainter) blendInto(off int, c RGBA) {
 	a := uint32(c.A)
 	ia := 255 - a
 	blend := func(src, dst uint8) uint8 { return uint8((uint32(src)*a + uint32(dst)*ia + 127) / 255) }
-	p.Buf[off] = blend(c.R, p.Buf[off])
-	p.Buf[off+1] = blend(c.G, p.Buf[off+1])
-	p.Buf[off+2] = blend(c.B, p.Buf[off+2])
+	p.Buf[off] = blend(b0, p.Buf[off])
+	p.Buf[off+1] = blend(b1, p.Buf[off+1])
+	p.Buf[off+2] = blend(b2, p.Buf[off+2])
 	p.Buf[off+3] = uint8(a + uint32(p.Buf[off+3])*ia/255)
 }
 
