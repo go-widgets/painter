@@ -162,3 +162,48 @@ func TestPixelPainterTextUnknownGlyphSkipped(t *testing.T) {
 		}
 	}
 }
+
+// TestABGRAPainterWritesBlueWhereRedGoes, through every path that writes a
+// colour: the fast opaque fill, an opaque pixel, and a translucent one.
+//
+// A buffer whose pixels are BGRA is what a screen capture hands over, and a
+// consumer drawing widgets over one had every colour reversed — an orange
+// selection ring came out blue.
+func TestABGRAPainterWritesBlueWhereRedGoes(t *testing.T) {
+	const w, h = 4, 2
+	red := RGB(0xFF, 0x00, 0x00)
+
+	// The fast path: an opaque FillRect builds one row and doubles it.
+	rgba := make([]byte, 4*w*h)
+	NewPixelPainter(rgba, w, h).FillRect(Rect{X: 0, Y: 0, W: w, H: h}, red)
+	bgra := make([]byte, 4*w*h)
+	NewPixelPainterBGRA(bgra, w, h).FillRect(Rect{X: 0, Y: 0, W: w, H: h}, red)
+	if rgba[0] != 0xFF || rgba[2] != 0x00 {
+		t.Errorf("plain: %02X %02X %02X, want FF 00 00", rgba[0], rgba[1], rgba[2])
+	}
+	if bgra[0] != 0x00 || bgra[2] != 0xFF {
+		t.Errorf("bgra: %02X %02X %02X, want 00 00 FF", bgra[0], bgra[1], bgra[2])
+	}
+	if bgra[3] != 0xFF {
+		t.Errorf("bgra alpha = %02X, want FF", bgra[3])
+	}
+
+	// One opaque pixel.
+	one := make([]byte, 4*w*h)
+	NewPixelPainterBGRA(one, w, h).PutPixel(1, 1, red)
+	off := (1*w + 1) * 4
+	if one[off] != 0x00 || one[off+2] != 0xFF {
+		t.Errorf("pixel: %02X %02X %02X, want 00 00 FF", one[off], one[off+1], one[off+2])
+	}
+
+	// And a translucent one, which composites channel by channel: half red over
+	// black must land in the BLUE byte.
+	half := make([]byte, 4*w*h)
+	NewPixelPainterBGRA(half, w, h).PutPixel(0, 0, RGBA{R: 0xFF, A: 0x80})
+	if half[0] != 0 {
+		t.Errorf("blended blue byte = %02X, want none of the red there", half[0])
+	}
+	if half[2] == 0 {
+		t.Error("blended: nothing landed in the blue byte, so the swap missed the blend path")
+	}
+}
