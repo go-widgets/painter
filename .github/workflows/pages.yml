@@ -3,19 +3,31 @@ name: pages
 on:
   push:
     branches: [main]
+  # Build on every pull request too, so a change to the sources, the Go
+  # version or one of the actions below has to prove the site still builds
+  # before it lands. Without this the workflow ran only on main, so a
+  # dependency bump arrived with no signal at all: its checks read "no checks",
+  # which is not the same thing as green and must not be merged as if it were.
+  pull_request:
   workflow_dispatch:
 
+# The build needs nothing beyond the source and the Pages configuration it
+# reads. Publishing rights are granted to the deploy job alone, below, so a
+# pull request build cannot replace what is served even if a step in it
+# misbehaves.
 permissions:
   contents: read
-  pages: write
-  id-token: write
+  pages: read
 
+# Deploys serialise with one another under the main group; each pull request
+# gets a group of its own, so it neither waits behind a deploy nor holds one
+# up, and a new push supersedes the run still in flight for the same ref.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -50,4 +62,20 @@ jobs:
         with:
           path: site/
 
-      - uses: actions/deploy-pages@v5
+  deploy:
+    # Only main publishes. A pull request stops after the build above: it has
+    # proved the site builds, which is the whole point of the gate, and it has
+    # no business replacing the published site.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
