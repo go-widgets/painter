@@ -13,6 +13,8 @@ import "github.com/go-gfx/gfx/vector"
 // widget migrated to Painter renders identically to today's toolkit
 // output.
 type PixelPainter struct {
+	// textScale magnifies the built-in bitmap font; 0 and 1 both mean 1:1.
+	textScale int
 	// Buf is the destination RGBA byte slice (4 bytes per pixel).
 	// The buffer is written in place; callers own its lifecycle.
 	Buf []byte
@@ -257,22 +259,67 @@ func (p *PixelPainter) blendInto(off int, c RGBA) {
 	p.Buf[off+3] = uint8(a + uint32(p.Buf[off+3])*ia/255)
 }
 
-// Text paints s at (x, y) using the built-in 5×7 bitmap font (see
-// font.go). Each glyph is 5 columns × 7 rows + 1 pixel of inter-
-// glyph spacing (advance = 6).
+// SetTextScale magnifies the built-in font by a whole number.
+//
+// The font is 5×7 PIXELS and was drawn at that size whatever the display: on a
+// screen with two device pixels to the point, a glyph is three and a half
+// points tall, which is not small type -- it is type nobody can read. Every
+// other metric in the toolkit above this passes through a HiDPI scale; the one
+// thing a person actually reads did not.
+//
+// A whole number, because a bitmap font magnified by 1.5 has rows of unequal
+// thickness and reads worse than the smaller size it came from. Anything below
+// 1 is 1.
+func (p *PixelPainter) SetTextScale(n int) {
+	if n < 1 {
+		n = 1
+	}
+	p.textScale = n
+}
+
+// TextScale is the magnification the built-in font is drawn at.
+func (p *PixelPainter) TextScale() int {
+	if p.textScale < 1 {
+		return 1
+	}
+	return p.textScale
+}
+
+// TextWidth is how wide s will be drawn, so a caller can right-align it or
+// decide it does not fit. It was arithmetic every caller did for itself, with
+// the advance hard-coded, which is a number that has just changed.
+func (p *PixelPainter) TextWidth(s string) int {
+	return len(s) * glyphAdvance * p.TextScale()
+}
+
+// TextHeight is how tall a line of the built-in font is drawn.
+func (p *PixelPainter) TextHeight() int { return glyphHeight * p.TextScale() }
+
+// Text paints s at (x, y) using the built-in 5×7 bitmap font (see font.go).
+// Each glyph is 5 columns × 7 rows + 1 pixel of inter-glyph spacing (advance =
+// 6), magnified by [PixelPainter.TextScale].
 func (p *PixelPainter) Text(x, y int, s string, ink RGBA) {
+	n := p.TextScale()
 	for k := 0; k < len(s); k++ {
 		bits, ok := font5x7[s[k]]
 		if !ok {
 			continue
 		}
-		gx := x + k*glyphAdvance
+		gx := x + k*glyphAdvance*n
 		for col := 0; col < 5; col++ {
 			cb := bits[col]
 			for row := 0; row < glyphHeight; row++ {
-				if cb&(1<<row) != 0 {
-					p.PutPixel(gx+col, y+row, ink)
+				if cb&(1<<row) == 0 {
+					continue
 				}
+				if n == 1 {
+					p.PutPixel(gx+col, y+row, ink)
+					continue
+				}
+				// One lit bit becomes an n×n block, which is what magnifying a
+				// bitmap font means. Drawn as a rect rather than n² PutPixel
+				// calls: a window of text is tens of thousands of bits.
+				p.FillRect(Rect{X: gx + col*n, Y: y + row*n, W: n, H: n}, ink)
 			}
 		}
 	}

@@ -207,3 +207,67 @@ func TestABGRAPainterWritesBlueWhereRedGoes(t *testing.T) {
 		t.Error("blended: nothing landed in the blue byte, so the swap missed the blend path")
 	}
 }
+
+// TestTheFontCanBeMagnified covers the one thing in this toolkit a person
+// actually reads.
+//
+// The font is 5×7 PIXELS and was drawn at that size whatever the display: on a
+// screen with two device pixels to the point, a glyph is three and a half
+// points tall — not small type, type nobody can read. Every other metric above
+// this passes through a HiDPI scale; this did not.
+func TestTheFontCanBeMagnified(t *testing.T) {
+	lit := func(p *PixelPainter, w, h int) int {
+		n := 0
+		for i := 3; i < len(p.Buf); i += 4 {
+			if p.Buf[i] != 0 {
+				n++
+			}
+		}
+		return n
+	}
+
+	const w, h = 200, 60
+	one := NewPixelPainter(make([]byte, w*h*4), w, h)
+	one.Text(2, 2, "AB", RGBA{R: 255, A: 255})
+	small := lit(one, w, h)
+	if small == 0 {
+		t.Fatal("nothing was drawn at 1:1")
+	}
+
+	three := NewPixelPainter(make([]byte, w*h*4), w, h)
+	three.SetTextScale(3)
+	three.Text(2, 2, "AB", RGBA{R: 255, A: 255})
+	big := lit(three, w, h)
+
+	// One lit bit becomes an n×n block, so nine times the ink for a scale of
+	// three. Exactly, because the glyphs are the same and nothing is clipped.
+	if big != small*9 {
+		t.Errorf("at scale 3 the text lit %d pixels, want %d (9× %d)", big, small*9, small)
+	}
+	if got := three.TextScale(); got != 3 {
+		t.Errorf("TextScale = %d, want 3", got)
+	}
+	// Measuring must follow the scale, or every caller right-aligning text
+	// puts it in the wrong place.
+	if got, want := three.TextWidth("AB"), 2*glyphAdvance*3; got != want {
+		t.Errorf("TextWidth = %d, want %d", got, want)
+	}
+	if got, want := three.TextHeight(), glyphHeight*3; got != want {
+		t.Errorf("TextHeight = %d, want %d", got, want)
+	}
+
+	// A painter nobody configured draws as it always did: the zero value is
+	// 1:1, which is what every existing caller expects.
+	if got := one.TextScale(); got != 1 {
+		t.Errorf("an unconfigured painter reports scale %d", got)
+	}
+	// A scale below one is one, not an invisible line of text.
+	one.SetTextScale(0)
+	if got := one.TextScale(); got != 1 {
+		t.Errorf("scale 0 became %d", got)
+	}
+	one.SetTextScale(-4)
+	if got := one.TextScale(); got != 1 {
+		t.Errorf("a negative scale became %d", got)
+	}
+}
