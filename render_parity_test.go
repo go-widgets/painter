@@ -19,7 +19,34 @@ import (
 // hermetic, verbatim copy of the PRE-migration rasterizer + composite
 // (render_refimpl_test.go). Every non-path primitive is unchanged code called
 // identically in both passes, so any byte difference can only come from the
-// rasterizer swap. The two buffers must be BYTE-IDENTICAL.
+// rasterizer swap.
+//
+// It asked for BYTE EQUALITY until go-gfx/gfx v0.10.0, and that was right while
+// the migration was the thing being proved. It is not right now: gfx has since
+// CORRECTED its stroke rasteriser, and a gate demanding the old bytes forbids
+// the correction. gfx's own comment names the defect it fixed --
+//
+//	Rasterising each piece on its own and keeping the greater coverage would
+//	look like the same thing and is not. Two pieces that meet along a shared
+//	edge each cover part of the pixel that edge cuts, and the greater of two
+//	halves is a half. A finely cut curve -- the way every plotting program
+//	writes one -- is nothing but such seams, and would come out at half its
+//	colour, combed through with lighter notches at every vertex.
+//
+// -- so the reference here is a frozen private copy of a rasteriser that has
+// been improved upstream, and holding gfx to it means holding painter at gfx
+// v0.1.0 forever. Measured against v0.20.0 over this scene:
+//
+//	276 bytes of 307200 differ (0.090%), peak 23, mean -1.39
+//	172 bytes darker, 104 lighter
+//
+// The mean being NEGATIVE is the correction showing: the old union under-darkened
+// the seams, so the new one is darker there, and the lighter bytes are the other
+// side of the same edges.
+//
+// What the gate still catches is a call wired wrongly -- a wrong colour, a wrong
+// winding rule, a path off by a pixel -- because none of those move 0.09% of the
+// buffer by 23 levels. They move all of it, or a whole shape of it.
 //
 // Rendering both on the same machine (rather than pinning a committed golden)
 // makes the proof immune to cross-architecture floating-point (FMA) differences:
@@ -181,21 +208,39 @@ func TestWidgetSceneRenderParity(t *testing.T) {
 	if len(pNew.Buf) != len(pRef.Buf) {
 		t.Fatalf("buffer sizes differ: new %d, ref %d", len(pNew.Buf), len(pRef.Buf))
 	}
-	diffs := 0
-	firstIdx := -1
+	diffs, peak, sum, firstIdx := 0, 0, 0, -1
 	for i := range pNew.Buf {
-		if pNew.Buf[i] != pRef.Buf[i] {
-			if firstIdx < 0 {
-				firstIdx = i
-			}
-			diffs++
+		d := int(pNew.Buf[i]) - int(pRef.Buf[i])
+		if d == 0 {
+			continue
+		}
+		if firstIdx < 0 {
+			firstIdx = i
+		}
+		diffs++
+		sum += d
+		if d < 0 {
+			d = -d
+		}
+		if d > peak {
+			peak = d
 		}
 	}
-	if diffs != 0 {
+	// The bounds sit far above what the correction costs and far below what a
+	// wiring mistake costs, which is the only reason a number here can be
+	// defended. Against gfx v0.20.0 this scene measures 0.090% and 23.
+	const maxShare, maxPeak = 0.01, 64
+	share := float64(diffs) / float64(len(pNew.Buf))
+	if share > maxShare || peak > maxPeak {
 		px := firstIdx / 4
-		t.Fatalf("migrated render differs from the pre-migration reference in %d bytes; "+
-			"first at byte %d (pixel %d, x=%d y=%d, channel %d): new %d ref %d",
-			diffs, firstIdx, px, px%W, px/W, firstIdx%4, pNew.Buf[firstIdx], pRef.Buf[firstIdx])
+		t.Fatalf("migrated render differs from the pre-migration reference in %d bytes "+
+			"(%.3f%%, peak %d, mean %+.2f); first at byte %d (pixel %d, x=%d y=%d, "+
+			"channel %d): new %d ref %d",
+			diffs, 100*share, peak, float64(sum)/float64(diffs), firstIdx, px,
+			px%W, px/W, firstIdx%4, pNew.Buf[firstIdx], pRef.Buf[firstIdx])
+	}
+	if diffs > 0 {
+		t.Logf("within bounds of the pre-migration reference: %d bytes differ (%.3f%%), peak %d, mean %+.2f", diffs, 100*share, peak, float64(sum)/float64(diffs))
 	}
 
 	// Control the instrument: the scene must actually have painted vector paths,
@@ -210,7 +255,7 @@ func TestWidgetSceneRenderParity(t *testing.T) {
 	if painted < W*H/2 {
 		t.Fatalf("scene painted only %d/%d pixels; too sparse to be a meaningful parity check", painted, W*H)
 	}
-	t.Logf("widget scene byte-identical between migrated painter and pre-migration reference (%d px painted)", painted)
+	t.Logf("widget scene compared over %d painted pixels", painted)
 }
 
 // TestRenderParityControl confirms the byte comparison is a live instrument: a
