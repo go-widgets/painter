@@ -4,110 +4,96 @@
 [![pages](https://github.com/go-widgets/painter/actions/workflows/pages.yml/badge.svg)](https://go-widgets.github.io/painter/)
 [![pkg.go.dev](https://img.shields.io/badge/pkg.go.dev-painter-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/go-widgets/painter)
 ![coverage](https://img.shields.io/badge/coverage-100%25-1a7f37)
-![go](https://img.shields.io/badge/Go-1.26.4%2B-00ADD8?logo=go&logoColor=white)
-![status](https://img.shields.io/badge/status-prototype-9a6700)
+![go](https://img.shields.io/badge/Go-1.27.1%2B-00ADD8?logo=go&logoColor=white)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-blue)](./LICENSE)
 
 **▶ Live demo: https://go-widgets.github.io/painter/**
 
-**Prototype** of a `Painter` abstraction that lets a single widget
-render into three deployment families with the *same code*:
 
-- **WUI** — browser wasm + `<canvas>` + `putImageData` (via `PixelPainter`)
-- **GUI** — native window (SDL / Ebitengine / image files) (via `PixelPainter`)
-- **TUI** — terminal cell grid + 24-bit ANSI (via `CellPainter`)
+The drawing seam of [go-widgets](https://github.com/go-widgets): one
+`Painter` interface that every widget draws through, and two painters that
+turn the same calls into different things:
 
-Both `PixelPainter` and `CellPainter` implement the same 5-primitive
-`Painter` interface — widgets never see the back-end.
+- **`PixelPainter`** writes into a caller-owned RGBA `[]byte`, which a native
+  window, a browser `<canvas>`, an Android surface or an image encoder then
+  presents;
+- **`CellPainter`** writes into a grid of terminal cells (rune, foreground,
+  background) with a 24-bit ANSI serialiser.
 
-## Why this exists
+A widget never learns which one it was handed. That is what lets
+[go-widgets/toolkit](https://github.com/go-widgets/toolkit), whose
+`Widget.Draw` has taken a `painter.Painter` since its v0.6, run unchanged in a
+window, a browser and a terminal.
 
-Today the go-widgets/toolkit widget's `Draw` takes a `([]byte, w int,
-h int)` — a hard binding to a pixel back-end. Great for the browser
-and native canvases; unworkable for a terminal grid, where the atom
-is a cell (rune + fg + bg), not a pixel.
-
-This repo prototypes the redesign so we can answer:
-
-> Can we write the same widget once and render it to WUI, GUI, *and*
-> TUI without conditional-compilation gymnastics?
-
-The 5-primitive interface says yes:
+## The interface
 
 ```go
 type Painter interface {
-    FillRect(r Rect, c RGBA)
-    StrokeRect(r Rect, c RGBA, lineW int)
-    PutPixel(x, y int, c RGBA)
-    Text(x, y int, s string, ink RGBA)
-    Size() (w, h int)
-}
-
-type Widget interface {
-    Draw(p Painter, theme *Theme)
+	FillRect(r Rect, c RGBA)
+	StrokeRect(r Rect, c RGBA, lineW int)
+	FillRoundRect(r Rect, radius int, c RGBA)
+	StrokeRoundRect(r Rect, radius int, c RGBA, lineW int)
+	PutPixel(x, y int, c RGBA)
+	Text(x, y int, s string, ink RGBA)
+	Size() (w, h int)
 }
 ```
 
-A widget's `Draw` composes only those five calls. The back-end
-decides whether they land as pixels or cells.
+Seven methods, all of which every back-end must implement — so the contract
+says what happens where a back-end cannot: a cell grid ignores `lineW`, and
+draws a rounded rectangle square.
+
+## Optional capabilities
+
+What not every surface can do is not in the base interface. A widget that
+needs it type-asserts, and draws something sensible when the answer is no:
+
+| Interface | Methods | File |
+| --- | --- | --- |
+| `Clipper` | `PushClip`, `PopClip` | `clip.go` |
+| `Translator` | `PushTranslate`, `PopTranslate` | `translate.go` |
+| `PathPainter` | `FillPath`, `StrokePath` | `path.go`, `pathpaint.go` |
+| `ImagePainter` | `DrawImage` | `image.go` |
+| `MaskPainter` | `DrawMask` | `mask.go` |
+| `FacePainter` | `TextFace` | `face.go` |
+
+```go
+if c, ok := p.(painter.Clipper); ok {
+	c.PushClip(bounds)
+	defer c.PopClip()
+}
+```
+
+`PixelPainter` implements all of them. Its anti-aliased paths are rasterised
+by [go-gfx/gfx/vector](https://github.com/go-gfx/gfx), in Go; that is the
+module's one dependency.
 
 ## Try it
 
 ```bash
-# WUI/GUI proxy — renders to a PNG the same way a browser canvas
-# would consume the RGBA buffer.
-go run ./cmd/wui-demo --out demo.png            # light theme
+# pixels, written as a PNG — what a browser canvas or a window would get
+go run ./cmd/wui-demo --out demo.png
 go run ./cmd/wui-demo --out demo.png --theme dark
 
-# TUI — writes 24-bit-ANSI to stdout; point your terminal at it.
+# cells, written to stdout as 24-bit ANSI
 go run ./cmd/tui-demo
 go run ./cmd/tui-demo --theme dark
 
-# WUI live in a browser — Chromium / Firefox / Safari:
+# pixels in a browser
 task serve                                      # http://localhost:8091/
 ```
 
-All three render **the exact same three widgets** (`Label`, two
-`Button`s, `ProgressBar`) through the exact same widget code in
-`widget.go`. The only thing that changes between them is which
-`Painter` implementation the widget's `Draw` sees.
-
-## What's in the box
-
-| File           | Contents                                                             |
-| -------------- | -------------------------------------------------------------------- |
-| `painter.go`   | `Painter` interface, `Rect`, `RGBA`, `RGB` helper                    |
-| `pixel.go`     | `PixelPainter` — writes into an RGBA `[]byte` buffer                 |
-| `cell.go`      | `CellPainter` — writes into a `[]Cell` grid + 24-bit-ANSI serializer |
-| `font.go`      | Minimal 5×7 bitmap font (uppercase + digits + punct.)                |
-| `theme.go`     | `Theme` struct + `LightTheme` / `DarkTheme` palettes                 |
-| `widget.go`    | Sample widgets: `Button`, `Label`, `ProgressBar`                     |
-| `cmd/wui-demo` | Renders widgets to a PNG (WUI / GUI back-end proxy)                  |
-| `cmd/wui-wasm` | Renders widgets to a browser `<canvas>` (WUI live demo)              |
-| `cmd/tui-demo` | Renders widgets to stdout as 24-bit ANSI (TUI)                       |
+The three demos draw the same three sample widgets (`widget.go`: `Label`, two
+`Button`s, a `ProgressBar`) through the same code; only the painter changes.
+Those widgets and the 5×7 font in `font.go` exist for the demos. The real
+widget set, and its full font support, is
+[go-widgets/toolkit](https://github.com/go-widgets/toolkit).
 
 ## Status
 
-**Prototype — design validation.** ~5-primitive API, 3 widgets,
-100 % coverage on library packages, `CGO_ENABLED=0`, builds on all
-6 supported 64-bit Go targets (amd64, arm64, riscv64, loong64,
-ppc64le, s390x) + `GOOS=js GOARCH=wasm`.
-
-The API is deliberately small. The next step, if the design proves
-out, is a wholesale migration of go-widgets/toolkit's widget set to
-this interface + folding this repo's implementation into the toolkit
-as its v1.0 rendering path.
-
-## Non-goals for the prototype
-
-- Not a full toolkit — 3 widgets only.
-- No event dispatch — `HitTest` / `OnEvent` are out of scope. They
-  come back once the render side is validated.
-- No full font — 5×7 bitmap covers uppercase + digits + a handful of
-  punctuation. A production merge reuses go-widgets/toolkit's full
-  font table.
-- No terminal host loop — `cmd/tui-demo` just writes ANSI to stdout;
-  it doesn't put the terminal into raw mode or dispatch input.
+The production seam of go-widgets/toolkit and go-widgets/tui. 100% statement
+coverage, `CGO_ENABLED=0`, cross-built for amd64, arm64, riscv64, loong64,
+ppc64le and s390x, and `GOOS=js GOARCH=wasm`.
 
 ## License
 
