@@ -4,6 +4,8 @@
 
 package painter
 
+import "github.com/go-gfx/gfx/vector"
+
 // PixelPainter is a PathPainter: it asks go-gfx/gfx/vector for the anti-aliased
 // coverage of an outline, then composites that coverage into its RGBA buffer
 // under its own clip. The rasterisation (flatten + scanline coverage + round
@@ -17,7 +19,7 @@ func (p *PixelPainter) FillPath(pth *Path, c RGBA, rule FillRule) {
 	if pth == nil || c.A == 0 {
 		return
 	}
-	cov, ox, oy, w, h, ok := p.rz.Fill(pth, rule, p.Width, p.Height)
+	cov, ox, oy, w, h, ok := p.rz.Fill(p.shiftPath(pth), rule, p.Width, p.Height)
 	if !ok {
 		return
 	}
@@ -32,11 +34,41 @@ func (p *PixelPainter) StrokePath(pth *Path, c RGBA, width float64) {
 	if pth == nil || c.A == 0 {
 		return
 	}
-	cov, ox, oy, w, h, ok := p.rz.Stroke(pth, width, p.Width, p.Height)
+	cov, ox, oy, w, h, ok := p.rz.Stroke(p.shiftPath(pth), width, p.Width, p.Height)
 	if !ok {
 		return
 	}
 	p.composite(cov, ox, oy, w, h, c)
+}
+
+// shiftPath returns pth moved by the translation in force, or pth itself
+// when there is none. Every other primitive is shifted in PutPixel or at the
+// top of its method; a path reaches the rasterizer whole, so it is shifted
+// here, command by command through vector.Path.Each, before it is scanned.
+// Without this a path ignored PushTranslate: a chart inside a scrolled view
+// was drawn where it would have been unscrolled.
+func (p *PixelPainter) shiftPath(pth *Path) *Path {
+	o := currentOffset(p.off)
+	if o.dx == 0 && o.dy == 0 {
+		return pth
+	}
+	dx, dy := float64(o.dx), float64(o.dy)
+	q := NewPath()
+	pth.Each(func(op vector.PathOp, pts ...[2]float64) {
+		switch op {
+		case vector.OpMove:
+			q.MoveTo(pts[0][0]+dx, pts[0][1]+dy)
+		case vector.OpLine:
+			q.LineTo(pts[0][0]+dx, pts[0][1]+dy)
+		case vector.OpQuad:
+			q.QuadTo(pts[0][0]+dx, pts[0][1]+dy, pts[1][0]+dx, pts[1][1]+dy)
+		case vector.OpCubic:
+			q.CubicTo(pts[0][0]+dx, pts[0][1]+dy, pts[1][0]+dx, pts[1][1]+dy, pts[2][0]+dx, pts[2][1]+dy)
+		default:
+			q.Close()
+		}
+	})
+	return q
 }
 
 // composite writes a coverage grid (w*h, values 0..1) at origin (ox, oy) into

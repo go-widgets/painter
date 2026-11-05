@@ -133,8 +133,9 @@ func renderWidgetScene(p *PixelPainter, fillP fillFn, strokeP strokeFn) {
 	strokeP(lineChartCmds(), RGB(0x00, 0xd0, 0x90), 2.5)
 
 	// Filled star icon via FillPath (EvenOdd) + StrokePath, under a translation.
-	// Paths do not honour the translation (they never did), but pushing it proves
-	// that stays true through the migration.
+	// Paths follow the translation like every other primitive. They did not
+	// until it was fixed, and this comment once said that pushing it here
+	// "proves that stays true": the test was pinning the defect.
 	p.PushTranslate(210, 96)
 	star := starIconCmds()
 	fillP(star, RGBA{0xf0, 0xc0, 0x20, 0xE0}, EvenOdd)
