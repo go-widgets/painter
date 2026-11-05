@@ -47,6 +47,20 @@ type refCmd struct {
 	x, y, cx1, cy1, cx2, cy2 float64
 }
 
+// refShift moves a command list by the painter's translation, which the
+// reference applies to a path exactly as PixelPainter now does. The
+// pre-extraction painter ignored the translation for paths; that was a
+// defect, not behaviour to preserve.
+func refShift(p *PixelPainter, cmds []refCmd) []refCmd {
+	o := currentOffset(p.off)
+	out := make([]refCmd, len(cmds))
+	for i, c := range cmds {
+		dx, dy := float64(o.dx), float64(o.dy)
+		out[i] = refCmd{c.op, c.x + dx, c.y + dy, c.cx1 + dx, c.cy1 + dy, c.cx2 + dx, c.cy2 + dy}
+	}
+	return out
+}
+
 // buildPath replays a command list onto a fresh public Path.
 func buildPath(cmds []refCmd) *Path {
 	p := NewPath()
@@ -413,7 +427,7 @@ func refFillPathInto(p *PixelPainter, cmds []refCmd, c RGBA, rule FillRule) {
 	if c.A == 0 {
 		return
 	}
-	edges := refFillEdges(refFlatten(cmds, refFlattenTol))
+	edges := refFillEdges(refFlatten(refShift(p, cmds), refFlattenTol))
 	if len(edges) == 0 {
 		return
 	}
@@ -435,7 +449,7 @@ func refStrokePathInto(p *PixelPainter, cmds []refCmd, c RGBA, width float64) {
 	hw := width / 2
 	var segs []refEdge
 	var verts []refPoint
-	for _, s := range refFlatten(cmds, refFlattenTol) {
+	for _, s := range refFlatten(refShift(p, cmds), refFlattenTol) {
 		n := len(s.pts)
 		if n < 2 {
 			continue
