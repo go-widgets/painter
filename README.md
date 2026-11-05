@@ -56,6 +56,13 @@ needs it type-asserts, and draws something sensible when the answer is no:
 | `ImagePainter` | `DrawImage` | `image.go` |
 | `MaskPainter` | `DrawMask` | `mask.go` |
 | `FacePainter` | `TextFace` | `face.go` |
+| `RasterPainter` | `Raster` (a marker) | `raster.go` |
+
+`RasterPainter` says that `PutPixel` lays down exactly the pixel PixelPainter
+would. Code that composes pixel by pixel, such as a bitmap font lighting one
+block per glyph bit, asks for it rather than for `*PixelPainter`. A painter
+that draws the same pixels another way, such as go-widgets/gpupainter on the
+GPU, then gets the same request. `CellPainter` does not implement it.
 
 ```go
 if c, ok := p.(painter.Clipper); ok {
