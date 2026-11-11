@@ -80,7 +80,7 @@ func (p *PixelPainter) strokeRoundOutline(r Rect, radius int, c RGBA) {
 	for _, cn := range corners(r, rad) {
 		for y := cn.y0; y < cn.y0+rad; y++ {
 			for x := cn.x0; x < cn.x0+rad; x++ {
-				d := math.Hypot(float64(x)+0.5-cn.cx, float64(y)+0.5-cn.cy)
+				d := cornerDist(x, y, cn.cx, cn.cy)
 				// Ring coverage peaks at 1 on the radius and falls off either
 				// side; never exceeds 1, so no upper clamp is needed.
 				cov := 1 - math.Abs(d-(rf-0.5))
@@ -110,7 +110,7 @@ func cornerFillCoverage(x, y int, r Rect, rad int, rf float64) float64 {
 	if !in {
 		return 1
 	}
-	d := math.Hypot(float64(x)+0.5-cx, float64(y)+0.5-cy)
+	d := cornerDist(x, y, cx, cy)
 	cov := rf + 0.5 - d
 	if cov < 0 {
 		return 0
@@ -119,6 +119,19 @@ func cornerFillCoverage(x, y int, r Rect, rad int, rf float64) float64 {
 		return 1
 	}
 	return cov
+}
+
+// cornerDist is the distance from the centre of pixel (x, y) to the corner
+// circle's centre (cx, cy), an integer point. The offsets are half-integers, so
+// 4·D, four times the squared distance, is an exact integer: it is computed in
+// integers, and math.Sqrt (correctly rounded, IEEE 754) gives the f64 nearest
+// the true distance; the division by two is exact. math.Hypot promises no
+// such rounding, and a GPU kernel can reproduce this definition exactly
+// (gpu2d's Coverage is the same function), which it cannot reproduce Hypot.
+func cornerDist(x, y int, cx, cy float64) float64 {
+	dx := int64(2*(float64(x)-cx)) + 1 // 2·(x + 0.5 − cx)
+	dy := int64(2*(float64(y)-cy)) + 1
+	return math.Sqrt(float64(dx*dx+dy*dy)) / 2
 }
 
 // cornerCenter returns the circle centre for whichever corner box (x,y) is in.
