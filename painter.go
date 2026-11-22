@@ -57,6 +57,29 @@ func (r Rect) Contains(px, py int) bool {
 	return px >= r.X && px < r.X+r.W && py >= r.Y && py < r.Y+r.H
 }
 
+// Empty reports whether r covers no unit: a zero or negative width or height.
+func (r Rect) Empty() bool { return r.W <= 0 || r.H <= 0 }
+
+// Area is the number of units r covers, 0 for an empty rectangle.
+func (r Rect) Area() int {
+	if r.Empty() {
+		return 0
+	}
+	return r.W * r.H
+}
+
+// Intersect returns the part of r that lies inside o. When the two do not
+// overlap the result is empty (Empty reports true); its position is then
+// unspecified.
+func (r Rect) Intersect(o Rect) Rect {
+	x0, y0 := max(r.X, o.X), max(r.Y, o.Y)
+	x1, y1 := min(r.X+r.W, o.X+o.W), min(r.Y+r.H, o.Y+o.H)
+	if x1 <= x0 || y1 <= y0 {
+		return Rect{}
+	}
+	return Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
+}
+
 // RGBA is a 32-bit colour value. Painters that can't represent a
 // given RGBA (a cell grid limited to 16 colours, for instance)
 // pick the closest supported value.
