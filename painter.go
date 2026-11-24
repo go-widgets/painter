@@ -80,6 +80,25 @@ func (r Rect) Intersect(o Rect) Rect {
 	return Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
 }
 
+// Union returns the smallest rectangle that contains both r and o: their
+// bounding box. An empty rectangle is the identity, so Union(empty, o) is o and
+// Union(r, empty) is r; the union of two empty rectangles is the zero Rect.
+// Union is commutative and associative, which is what lets a host accumulate
+// the damage of a frame with a fold.
+func (r Rect) Union(o Rect) Rect {
+	switch {
+	case r.Empty() && o.Empty():
+		return Rect{}
+	case r.Empty():
+		return o
+	case o.Empty():
+		return r
+	}
+	x0, y0 := min(r.X, o.X), min(r.Y, o.Y)
+	x1, y1 := max(r.X+r.W, o.X+o.W), max(r.Y+r.H, o.Y+o.H)
+	return Rect{X: x0, Y: y0, W: x1 - x0, H: y1 - y0}
+}
+
 // RGBA is a 32-bit colour value. Painters that can't represent a
 // given RGBA (a cell grid limited to 16 colours, for instance)
 // pick the closest supported value.
