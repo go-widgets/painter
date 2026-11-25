@@ -160,19 +160,27 @@ func TestBoxOneAxisOnly(t *testing.T) {
 // 4 would blend neighbouring rows if the enlarged axis were boxed too.
 func TestBoxEnlargedAxisStaysNearestWhenTheOtherShrinks(t *testing.T) {
 	// Height 3 -> 4, width 8 -> 4: green is the source row (0,1,2).
+	// Bright values: a wrongly partial weight shows as a dimmer pixel.
+	bright := func(w, h int) []byte {
+		b := srcImage(w, h)
+		for i := 0; i < len(b); i += 4 {
+			b[i], b[i+1] = 100+b[i]*50, 100+b[i+1]*50
+		}
+		return b
+	}
 	p := newPix(4, 4)
-	p.DrawImage(Rect{W: 4, H: 4}, srcImage(8, 3), 8, 3)
+	p.DrawImage(Rect{W: 4, H: 4}, bright(8, 3), 8, 3)
 	for dy := 0; dy < 4; dy++ {
-		if got, want := pixAt(p, 1, dy).G, byte(dy*3/4); got != want {
+		if got, want := pixAt(p, 1, dy).G, byte(100+dy*3/4*50); got != want {
 			t.Fatalf("row %d: green %d, want %d (nearest)", dy, got, want)
 		}
 	}
 	// Width 3 -> 4, height 8 -> 4: red is the source column (0,1,2); the srcImage
 	// green channel (the row) is averaged, so only red is the nearest column.
 	q := newPix(4, 4)
-	q.DrawImage(Rect{W: 4, H: 4}, srcImage(3, 8), 3, 8)
+	q.DrawImage(Rect{W: 4, H: 4}, bright(3, 8), 3, 8)
 	for dx := 0; dx < 4; dx++ {
-		if got, want := pixAt(q, dx, 1).R, byte(dx*3/4); got != want {
+		if got, want := pixAt(q, dx, 1).R, byte(100+dx*3/4*50); got != want {
 			t.Fatalf("column %d: red %d, want %d (nearest)", dx, got, want)
 		}
 	}
