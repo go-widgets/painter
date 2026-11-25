@@ -245,3 +245,63 @@ func benchDown(b *testing.B, sw, sh, dw, dh int) {
 func BenchmarkDrawImageDownscale256to24(b *testing.B)   { benchDown(b, 256, 256, 24, 24) }
 func BenchmarkDrawImageDownscale64to16(b *testing.B)    { benchDown(b, 64, 64, 16, 16) }
 func BenchmarkDrawImageDownscale1000to250(b *testing.B) { benchDown(b, 1000, 700, 250, 175) }
+
+// boxBound is the STATED error bound of the box filter: the arithmetic is exact
+// integer, so every byte is the real-number area mean rounded half up, at most
+// one half away from it (the epsilon absorbs the float64 rounding of the oracle).
+const boxBound = 0.5 + 1e-6
+
+// boxCheck runs boxReduce on src and compares every destination pixel, colour
+// and alpha, with the float64 oracle, translucent pixels included.
+func boxCheck(t testing.TB, src []byte, sw, sh, dw, dh int) {
+	t.Helper()
+	seen := make([]bool, dw*dh)
+	boxReduce(Rect{W: dw, H: dh}, Rect{W: dw, H: dh}, src, sw, sh, func(y, x int, c RGBA) {
+		seen[y*dw+x] = true
+		r, g, b, a := boxOracle(src, sw, sh, dw, dh, x, y)
+		for k, pair := range [][2]float64{{r, float64(c.R)}, {g, float64(c.G)}, {b, float64(c.B)}, {a, float64(c.A)}} {
+			if math.Abs(pair[0]-pair[1]) > boxBound {
+				t.Fatalf("%dx%d->%dx%d (%d,%d) ch%d: got %v, oracle %.4f, bound %.1f", sw, sh, dw, dh, x, y, k, pair[1], pair[0], boxBound)
+			}
+		}
+	})
+	for y := 0; y < dh; y++ {
+		for x := 0; x < dw; x++ {
+			if _, _, _, a := boxOracle(src, sw, sh, dw, dh, x, y); !seen[y*dw+x] && a >= 0.5+1e-6 {
+				t.Fatalf("%dx%d->%dx%d (%d,%d): skipped, oracle alpha %.4f", sw, sh, dw, dh, x, y, a)
+			}
+		}
+	}
+}
+
+// The bound holds on random TRANSLUCENT pictures, integer and fractional ratios,
+// one axis or both, down to a single pixel.
+func TestBoxExactWithinStatedBound(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for _, c := range [][4]int{{64, 64, 16, 16}, {256, 256, 24, 24}, {37, 23, 11, 7}, {10, 10, 1, 1},
+		{9, 6, 6, 4}, {100, 30, 100, 9}, {30, 100, 7, 100}, {17, 17, 16, 16}, {300, 5, 299, 5},
+		// integer ratio too heavy for the uint32 SumGroups path
+		{300, 300, 1, 1}, {300, 4, 100, 2},
+		// a reduction taller than boxMaxWeight takes the uint64 path
+		{3, 70000, 2, 3}, {1, 66052, 1, 5}} {
+		src := make([]byte, c[0]*c[1]*4)
+		rng.Read(src)
+		boxCheck(t, src, c[0], c[1], c[2], c[3])
+	}
+}
+
+// FuzzBoxVsOracle: any translucent picture and any reduced size agrees with the
+// float64 oracle within the stated bound.
+func FuzzBoxVsOracle(f *testing.F) {
+	f.Add(uint8(40), uint8(30), uint8(7), uint8(5), int64(1))
+	f.Add(uint8(64), uint8(64), uint8(16), uint8(16), int64(2))
+	f.Fuzz(func(t *testing.T, sw, sh, dw, dh uint8, seed int64) {
+		// An enlarged axis is nearest, not averaged, which the oracle does not model:
+		// the destination is clamped to the source on both axes.
+		w, h := int(sw)%97+1, int(sh)%97+1
+		ow, oh := min(int(dw)%97+1, w), min(int(dh)%97+1, h)
+		src := make([]byte, w*h*4)
+		rand.New(rand.NewSource(seed)).Read(src)
+		boxCheck(t, src, w, h, ow, oh)
+	})
+}
