@@ -58,6 +58,12 @@ needs it type-asserts, and draws something sensible when the answer is no:
 | `FacePainter` | `TextFace` | `face.go` |
 | `RasterPainter` | `Raster` (a marker) | `raster.go` |
 
+`IconBGRAOver` (`icon.go`) renders a decoded RGBA picture, shrunk to fit a box
+and composited over a background colour, as the top-down BGRA a native button
+(a Windows DIB section) takes; `IconSize` is its aspect-preserving fit. A
+`DrawImage` on a BGRA painter swaps opaque pixels too (before v0.20.0 it copied
+them as they were).
+
 `RasterPainter` says that `PutPixel` lays down exactly the pixel PixelPainter
 would. Code that composes pixel by pixel, such as a bitmap font lighting one
 block per glyph bit, asks for it rather than for `*PixelPainter`. A painter

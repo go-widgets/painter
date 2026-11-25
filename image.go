@@ -91,7 +91,9 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 		// A fully opaque row replaces what was underneath, so it can be written
 		// without consulting it. A row with any translucency cannot: the result
 		// depends on the ground, which differs from row to row.
-		if rowOpaque(src[srcRow : srcRow+srcW*4]) {
+		// A BGRA painter takes neither verbatim path: both copy source bytes as
+		// they are, which would leave red and blue exchanged.
+		if !p.swap && rowOpaque(src[srcRow:srcRow+srcW*4]) {
 			if dst.W == srcW && eff.X == dst.X && eff.W == dst.W {
 				copy(p.Buf[lo:hi], src[srcRow:srcRow+srcW*4])
 			} else {
@@ -104,7 +106,7 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 		for x := eff.X; x < eff.X+eff.W; x++ {
 			sOff := srcRow + ((x-dst.X)*srcW/dst.W)*4
 			dOff := dstRow + x*4
-			if a := src[sOff+3]; a == 0xFF {
+			if a := src[sOff+3]; a == 0xFF && !p.swap {
 				copy(p.Buf[dOff:dOff+4], src[sOff:sOff+4])
 			} else if a != 0 {
 				p.blendInto(dOff, RGBA{
