@@ -132,11 +132,5 @@ func (p *PixelPainter) drawImageBox(dst, eff Rect, src []byte, srcW, srcH int) {
 
 // boxByte rounds v to the nearest byte, clamped to 0..255.
 func boxByte(v float64) uint8 {
-	if v <= 0 {
-		return 0
-	}
-	if v >= 255 {
-		return 255
-	}
-	return uint8(v + 0.5)
+	return uint8(min(max(v, 0), 255) + 0.5)
 }

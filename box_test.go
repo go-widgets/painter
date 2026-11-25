@@ -155,6 +155,29 @@ func TestBoxOneAxisOnly(t *testing.T) {
 	}
 }
 
+// An axis enlarged by a NON-integer ratio keeps the exact nearest-neighbour
+// mapping while the other axis is averaged: a window over 3 source rows shown on
+// 4 would blend neighbouring rows if the enlarged axis were boxed too.
+func TestBoxEnlargedAxisStaysNearestWhenTheOtherShrinks(t *testing.T) {
+	// Height 3 -> 4, width 8 -> 4: green is the source row (0,1,2).
+	p := newPix(4, 4)
+	p.DrawImage(Rect{W: 4, H: 4}, srcImage(8, 3), 8, 3)
+	for dy := 0; dy < 4; dy++ {
+		if got, want := pixAt(p, 1, dy).G, byte(dy*3/4); got != want {
+			t.Fatalf("row %d: green %d, want %d (nearest)", dy, got, want)
+		}
+	}
+	// Width 3 -> 4, height 8 -> 4: red is the source column (0,1,2); the srcImage
+	// green channel (the row) is averaged, so only red is the nearest column.
+	q := newPix(4, 4)
+	q.DrawImage(Rect{W: 4, H: 4}, srcImage(3, 8), 3, 8)
+	for dx := 0; dx < 4; dx++ {
+		if got, want := pixAt(q, dx, 1).R, byte(dx*3/4); got != want {
+			t.Fatalf("column %d: red %d, want %d (nearest)", dx, got, want)
+		}
+	}
+}
+
 // A Buf shorter than Width*Height*4 is tolerated like PutPixel tolerates it: the
 // rows that do not fit are skipped, not fatal.
 func TestBoxDownscaleSkipsRowsBeyondAShortBuf(t *testing.T) {
