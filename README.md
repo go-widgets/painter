@@ -64,6 +64,20 @@ and composited over a background colour, as the top-down BGRA a native button
 `DrawImage` on a BGRA painter swaps opaque pixels too (before v0.20.0 it copied
 them as they were).
 
+A `DrawImage` shown smaller than the picture averages the source under each
+destination pixel (box filter on premultiplied alpha; an enlarged axis stays
+nearest). The arithmetic is exact integer, so every byte is within 0.5 of the
+real-number area mean (asserted against a float64 oracle), and the two passes
+run in the NEON / AVX2 kernels of
+[go-simd/boxfilter](https://github.com/go-simd/boxfilter); a call allocates
+nothing. Apple M4 Max, one core, `go test -bench Downscale -cpu 1`, load 8:
+
+| size | v0.20.0 (nearest) | v0.20.1 (float) | now |
+| --- | ---: | ---: | ---: |
+| 256x256 to 24x24 | 3.0 us | 108 us, 2 allocs | 20.7 us, 0 allocs |
+| 64x64 to 16x16 | 0.55 us | 8.4 us, 2 allocs | 2.3 us, 0 allocs |
+| 1000x700 to 250x175 | 95 us | 1.41 ms, 2 allocs | 315 us, 0 allocs |
+
 `RasterPainter` says that `PutPixel` lays down exactly the pixel PixelPainter
 would. Code that composes pixel by pixel, such as a bitmap font lighting one
 block per glyph bit, asks for it rather than for `*PixelPainter`. A painter
