@@ -305,3 +305,72 @@ func FuzzBoxVsOracle(f *testing.F) {
 		boxCheck(t, src, w, h, ow, oh)
 	})
 }
+
+// noPanic fails the test, by assertion, if f panics.
+func noPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
+func TestBoxGrowReusesWhatFits(t *testing.T) {
+	big := make([]int, 2, 8)
+	got := grow(big, 5)
+	if len(got) != 5 || &got[0] != &big[0] {
+		t.Fatalf("grow within the capacity: len %d, reused %v", len(got), &got[0] == &big[0])
+	}
+	small := make([]int, 2)
+	if got := grow(small, 5); len(got) != 5 || cap(got) < 5 {
+		t.Fatalf("grow past the capacity: len %d cap %d", len(got), cap(got))
+	}
+	if got := grow(small, 2); len(got) != 2 || &got[0] != &small[0] {
+		t.Fatal("grow to exactly the capacity must reuse")
+	}
+}
+
+// The pooled scratch is resized between calls of different sizes.
+func TestBoxScratchSurvivesSizeChanges(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	for _, c := range [][4]int{{200, 200, 50, 50}, {20, 20, 5, 5}, {200, 100, 100, 50}, {8, 8, 4, 4}} {
+		src := make([]byte, c[0]*c[1]*4)
+		rng.Read(src)
+		boxCheck(t, src, c[0], c[1], c[2], c[3])
+	}
+}
+
+// A destination pixel whose alpha rounds to nothing is not drawn.
+func TestBoxSkipsTransparentPixels(t *testing.T) {
+	src := make([]byte, 8*8*4) // fully transparent
+	n := 0
+	noPanic(t, "transparent source", func() {
+		boxReduce(Rect{W: 2, H: 2}, Rect{W: 2, H: 2}, src, 8, 8, func(int, int, RGBA) { n++ })
+	})
+	if n != 0 {
+		t.Fatalf("%d pixels drawn from a transparent source", n)
+	}
+	src[3] = 1 // one source pixel of alpha 1 among 16: mean 1/16, rounds to 0
+	noPanic(t, "faint source", func() {
+		boxReduce(Rect{W: 2, H: 2}, Rect{W: 2, H: 2}, src, 8, 8, func(int, int, RGBA) { n++ })
+	})
+	if n != 0 {
+		t.Fatalf("alpha 1/16 drew %d pixels", n)
+	}
+}
+
+// A buffer shorter than Width*Height*4 is tolerated.
+func TestBoxShortBufIsTolerated(t *testing.T) {
+	p := newPix(8, 8)
+	p.Buf = p.Buf[:10]
+	src := make([]byte, 32*32*4)
+	for i := range src {
+		src[i] = 0xFF
+	}
+	noPanic(t, "short Buf", func() { p.DrawImage(Rect{W: 8, H: 8}, src, 32, 32) })
+	if p.Buf[0] != 0xFF || p.Buf[4] != 0xFF {
+		t.Fatalf("the pixels that fit were not drawn: %v", p.Buf[:8])
+	}
+}
