@@ -179,8 +179,8 @@ func TestDrawImageMatchesTheLoopItReplaced(t *testing.T) {
 		{name: "1:1 offset", srcW: 8, srcH: 4, dstW: 8, dstH: 4, dstX: 3, dstY: 2},
 		{name: "enlarged 3x", srcW: 5, srcH: 4, dstW: 15, dstH: 12},
 		{name: "enlarged unevenly", srcW: 5, srcH: 4, dstW: 13, dstH: 9},
-		{name: "shrunk", srcW: 12, srcH: 10, dstW: 5, dstH: 3},
-		{name: "wider, shorter", srcW: 4, srcH: 9, dstW: 17, dstH: 3},
+		// A reduction on either axis is no longer the nearest-neighbour loop:
+		// it is the area mean of box.go, tested in box_test.go.
 		{name: "off the left and top", srcW: 8, srcH: 6, dstW: 8, dstH: 6, dstX: -3, dstY: -2},
 		{name: "off the right and bottom", srcW: 8, srcH: 6, dstW: 8, dstH: 6, dstX: 15, dstY: 16},
 		{name: "clipped in x only", srcW: 8, srcH: 6, dstW: 16, dstH: 12, clip: &Rect{X: 4, Y: 0, W: 6, H: 20}},

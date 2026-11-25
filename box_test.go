@@ -1,0 +1,216 @@
+// Copyright (c) 2026 the go-widgets/painter authors. All rights reserved.
+// Use of this source code is governed by a BSD-3-Clause license that can be
+// found in the LICENSE file at the root of this repository.
+
+package painter
+
+import (
+	"math"
+	"math/rand"
+	"testing"
+)
+
+func checker(w, h int) []byte {
+	b := make([]byte, w*h*4)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			v := byte(0)
+			if (x+y)%2 == 0 {
+				v = 255
+			}
+			o := (y*w + x) * 4
+			b[o], b[o+1], b[o+2], b[o+3] = v, v, v, 255
+		}
+	}
+	return b
+}
+
+// A one pixel checkerboard shrunk by an integer factor n averages every n x n
+// block: n even gives exactly half white, n odd gives (n*n+1)/2 of one colour,
+// so the mean grey is 127.5 off by at most 255/(2*n*n) before rounding. The
+// stated bound is that plus one level of rounding.
+func TestBoxDownscaleCheckerboardIsMeanGrey(t *testing.T) {
+	for _, n := range []int{2, 3, 4, 5, 8, 10} {
+		const out = 12
+		src := checker(out*n, out*n)
+		p := newPix(out, out)
+		p.DrawImage(Rect{W: out, H: out}, src, out*n, out*n)
+		bound := 255.0/(2*float64(n*n)) + 1
+		for y := 0; y < out; y++ {
+			for x := 0; x < out; x++ {
+				c := pixAt(p, x, y)
+				for _, v := range []byte{c.R, c.G, c.B} {
+					if d := math.Abs(float64(v) - 127.5); d > bound {
+						t.Fatalf("n=%d (%d,%d): %d is %.1f from 127.5, bound %.1f", n, x, y, v, d, bound)
+					}
+				}
+				if c.A != 255 {
+					t.Fatalf("n=%d: alpha %d, want 255", n, c.A)
+				}
+			}
+		}
+	}
+}
+
+// boxOracle is the area mean written the plain way (a coverage product per
+// source pixel, in float64) to check the separable implementation against.
+func boxOracle(src []byte, sw, sh, dw, dh, x, y int) (r, g, b, a float64) {
+	sx0, sx1 := float64(x)*float64(sw)/float64(dw), float64(x+1)*float64(sw)/float64(dw)
+	sy0, sy1 := float64(y)*float64(sh)/float64(dh), float64(y+1)*float64(sh)/float64(dh)
+	var tot, pr, pg, pb, pa float64
+	for j := int(sy0); float64(j) < sy1; j++ {
+		for i := int(sx0); float64(i) < sx1; i++ {
+			w := (math.Min(sx1, float64(i+1)) - math.Max(sx0, float64(i))) *
+				(math.Min(sy1, float64(j+1)) - math.Max(sy0, float64(j)))
+			o := (j*sw + i) * 4
+			al := float64(src[o+3])
+			tot += w
+			pr += w * float64(src[o]) * al
+			pg += w * float64(src[o+1]) * al
+			pb += w * float64(src[o+2]) * al
+			pa += w * al
+		}
+	}
+	return pr / pa, pg / pa, pb / pa, pa / tot
+}
+
+// Non-integer ratios agree with the oracle to one level on every channel.
+func TestBoxDownscaleMatchesAnOracle(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for _, c := range [][4]int{{10, 10, 4, 4}, {37, 23, 11, 7}, {64, 64, 24, 24}, {100, 30, 100, 9}, {30, 100, 7, 100}} {
+		sw, sh, dw, dh := c[0], c[1], c[2], c[3]
+		src := make([]byte, sw*sh*4)
+		for i := range src {
+			src[i] = byte(rng.Intn(256))
+		}
+		for i := 3; i < len(src); i += 4 {
+			src[i] = 255 // opaque: the result is then the plain colour mean
+		}
+		p := newPix(dw, dh)
+		p.DrawImage(Rect{W: dw, H: dh}, src, sw, sh)
+		for y := 0; y < dh; y++ {
+			for x := 0; x < dw; x++ {
+				r, g, b, _ := boxOracle(src, sw, sh, dw, dh, x, y)
+				got := pixAt(p, x, y)
+				for k, pair := range [][2]float64{{r, float64(got.R)}, {g, float64(got.G)}, {b, float64(got.B)}} {
+					if math.Abs(pair[0]-pair[1]) > 1 {
+						t.Fatalf("%v (%d,%d) ch%d: got %v, oracle %.2f", c, x, y, k, pair[1], pair[0])
+					}
+				}
+			}
+		}
+	}
+}
+
+// A white shape on a transparent BLACK ground, shrunk onto a white ground, must
+// come out white everywhere: averaging straight colour would drag the black of
+// the invisible pixels in and leave a dark fringe on the edge.
+func TestBoxDownscaleAlphaEdgeHasNoDarkFringe(t *testing.T) {
+	const sw, sh, dw, dh = 40, 40, 7, 7 // 40/7: the edge falls mid-pixel
+	src := make([]byte, sw*sh*4)
+	for y := 0; y < sh; y++ {
+		for x := 0; x < sw; x++ {
+			o := (y*sw + x) * 4
+			if x < 17 {
+				src[o], src[o+1], src[o+2], src[o+3] = 255, 255, 255, 255
+			} // else 0,0,0,0
+		}
+	}
+	p := newPix(dw, dh)
+	for i := range p.Buf {
+		p.Buf[i] = 255
+	}
+	p.DrawImage(Rect{W: dw, H: dh}, src, sw, sh)
+	for y := 0; y < dh; y++ {
+		for x := 0; x < dw; x++ {
+			if c := pixAt(p, x, y); c.R < 254 || c.G < 254 || c.B < 254 {
+				t.Fatalf("(%d,%d) = %v: a dark fringe", x, y, c)
+			}
+		}
+	}
+	// And the soft edge really is partial alpha, not a hard cut: over a black
+	// ground the edge column lies strictly between black and white.
+	q := newPix(dw, dh)
+	q.DrawImage(Rect{W: dw, H: dh}, src, sw, sh)
+	edge := pixAt(q, 2, 3) // columns 14.3..20 of 40 straddle x=17
+	if edge.R == 0 || edge.R == 255 {
+		t.Fatalf("edge pixel %v is not a partial blend", edge)
+	}
+}
+
+// Only a reduced axis is averaged; an enlarged one keeps nearest sampling.
+func TestBoxOneAxisOnly(t *testing.T) {
+	src := srcImage(8, 2) // red = column, green = row
+	p := newPix(8, 4)     // width unchanged, height doubled: nothing shrinks
+	p.DrawImage(Rect{W: 8, H: 4}, src, 8, 2)
+	if got := pixAt(p, 5, 3); got.R != 5 || got.G != 1 {
+		t.Fatalf("enlarge changed: %v", got)
+	}
+	q := newPix(4, 4) // width halves (averaged), height doubles (nearest)
+	q.DrawImage(Rect{W: 4, H: 4}, src, 8, 2)
+	// Destination column 1 covers source columns 2 and 3: red 2.5 -> 3 (round
+	// half up); destination row 3 is source row 1, green exactly 1.
+	if got := pixAt(q, 1, 3); got.R != 3 || got.G != 1 {
+		t.Fatalf("got %v, want red 3 (mean of 2,3) and green 1 (nearest row)", got)
+	}
+}
+
+// A Buf shorter than Width*Height*4 is tolerated like PutPixel tolerates it: the
+// rows that do not fit are skipped, not fatal.
+func TestBoxDownscaleSkipsRowsBeyondAShortBuf(t *testing.T) {
+	p := newPix(8, 8)
+	p.Buf = p.Buf[:8*4*3] // three rows of eight
+	p.DrawImage(Rect{W: 8, H: 8}, checker(16, 16), 16, 16)
+	if got := pixAt(p, 0, 2); got.A != 255 {
+		t.Fatalf("a row that fits was not drawn: %v", got)
+	}
+}
+
+// FuzzDrawImageBox: any sizes, clip and translation: no panic, nothing written
+// outside the clip, and a short buffer is ignored.
+func FuzzDrawImageBox(f *testing.F) {
+	f.Add(uint8(64), uint8(64), uint8(5), uint8(5), int8(0), int8(0), uint8(10), uint8(10), int64(1))
+	f.Add(uint8(3), uint8(200), uint8(1), uint8(9), int8(-4), int8(7), uint8(3), uint8(30), int64(2))
+	f.Fuzz(func(t *testing.T, sw, sh, dw, dh uint8, dx, dy int8, cw, ch uint8, seed int64) {
+		w, h := int(sw), int(sh)
+		if w == 0 || h == 0 {
+			return
+		}
+		rng := rand.New(rand.NewSource(seed))
+		src := make([]byte, w*h*4)
+		rng.Read(src)
+		const sz = 40
+		p := newPix(sz, sz)
+		before := append([]byte(nil), p.Buf...)
+		clip := Rect{X: 5, Y: 5, W: int(cw) % 30, H: int(ch) % 30}
+		p.PushClip(clip)
+		p.DrawImage(Rect{X: int(dx), Y: int(dy), W: int(dw), H: int(dh)}, src, w, h)
+		p.PopClip()
+		for y := 0; y < sz; y++ {
+			for x := 0; x < sz; x++ {
+				in := x >= clip.X && x < clip.X+clip.W && y >= clip.Y && y < clip.Y+clip.H
+				o := (y*sz + x) * 4
+				if !in && (p.Buf[o] != before[o] || p.Buf[o+1] != before[o+1] || p.Buf[o+2] != before[o+2] || p.Buf[o+3] != before[o+3]) {
+					t.Fatalf("pixel (%d,%d) outside the clip %v was written", x, y, clip)
+				}
+			}
+		}
+		// A short source is ignored, never read past.
+		p.DrawImage(Rect{W: int(dw), H: int(dh)}, src[:len(src)/2], w, h)
+	})
+}
+
+func benchDown(b *testing.B, sw, sh, dw, dh int) {
+	p := newPix(dw, dh)
+	src := srcImage(sw, sh)
+	dst := Rect{W: dw, H: dh}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		p.DrawImage(dst, src, sw, sh)
+	}
+}
+
+func BenchmarkDrawImageDownscale256to24(b *testing.B)   { benchDown(b, 256, 256, 24, 24) }
+func BenchmarkDrawImageDownscale64to16(b *testing.B)    { benchDown(b, 64, 64, 16, 16) }
+func BenchmarkDrawImageDownscale1000to250(b *testing.B) { benchDown(b, 1000, 700, 250, 175) }

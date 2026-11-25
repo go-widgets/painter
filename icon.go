@@ -35,8 +35,8 @@ func IconSize(srcW, srcH, boxW, boxH, pad int) (w, h int) {
 // pixel) at [IconSize] over the opaque background bg, and returns it as
 // top-down BGRA with alpha 255: the layout of a 32-bit Windows DIB section, a
 // native button's picture. Sampling is [PixelPainter.DrawImage]'s
-// (nearest-neighbour) and the blend is the painter's, so there is one
-// implementation of both.
+// (an area-weighted mean on premultiplied alpha when it shrinks the picture)
+// and the blend is the painter's, so there is one implementation of both.
 //
 // Because the result is never larger than the source, the output is bounded by
 // the input: a src shorter than srcW*srcH*4, or a non-positive size, answers
