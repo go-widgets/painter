@@ -17,10 +17,14 @@ package painter
 // the raw buffer, which is exactly what stops them being hosted by a back-end
 // that hands out a Painter and nothing else.
 //
-// DrawImage scales src (srcW x srcH, 4 bytes per pixel, RGBA) into dst by
-// nearest-neighbour sampling — the same mapping the hand-written loops used, so
-// output is unchanged — and honours the active clip and translation like every
-// other primitive.
+// DrawImage scales src (srcW x srcH, 4 bytes per pixel, RGBA) into dst and
+// honours the active clip and translation like every other primitive. An
+// enlargement (or a 1:1 blit) samples the nearest source pixel — the same
+// mapping the hand-written loops used, so output is unchanged. A reduction, on
+// either axis, takes the area-weighted mean of the source pixels under each
+// destination pixel, on premultiplied alpha, so a large icon shown small does
+// not alias and a soft edge leaves no dark fringe (a PixelPainter; the
+// CellPainter keeps one sample per cell).
 //
 // A src that is too short for srcW*srcH*4 is ignored rather than read past its
 // end: the caller has a bug, and a painter is the wrong place to panic.
@@ -55,6 +59,13 @@ func (p *PixelPainter) DrawImage(dst Rect, src []byte, srcW, srcH int) {
 		eff = intersect(eff, p.clip[n-1])
 	}
 	if eff.W <= 0 || eff.H <= 0 {
+		return
+	}
+
+	// A picture shown smaller than it is, on either axis, is averaged (box
+	// filter, premultiplied) rather than sampled: see box.go.
+	if dst.W < srcW || dst.H < srcH {
+		p.drawImageBox(dst, eff, src, srcW, srcH)
 		return
 	}
 
