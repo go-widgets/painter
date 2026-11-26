@@ -41,7 +41,9 @@ import (
 // then each destination pixel sums its span of that row, the interior pixels of a
 // span carrying one common weight so they are added first and multiplied once.
 // When the horizontal ratio is an integer (every weight 1) the second pass is
-// the SumGroups kernel as well. uint32 holds the sums while the total vertical
+// the SumGroups kernel as well, and when the vertical ratio is a whole number (or
+// there is no vertical reduction) both passes are one SumBlocks call that keeps
+// the sums in registers. uint32 holds the sums while the total vertical
 // weight is at most boxMaxWeight (65025 times it stays below 2^32); a taller
 // reduction than that takes a uint64 scalar path with the same results. The
 // scratch is pooled: a steady-state call does not allocate.
@@ -195,6 +197,9 @@ func boxReduce(dst, eff Rect, src []byte, srcW, srcH int, put func(y, xi int, c 
 	// Whole groups of srcN source pixels, every weight 1, and the sums still
 	// fit a uint32: the horizontal pass is one SumGroups call.
 	groups := !wide && ax.down && ax.dstN == 1 && norm <= boxMaxWeight
+	// ... and the rows too: a whole-number vertical ratio (or no reduction, one
+	// row) is the SumBlocks kernel, which sums the n x m blocks in registers.
+	blocks := groups && (ay.dstN == 1 || !ay.down)
 	if wide {
 		sc.v64 = grow(sc.v64, 4*(hi-lo))
 	} else {
@@ -235,6 +240,15 @@ func boxReduce(dst, eff Rect, src []byte, srcW, srcH int, put func(y, xi int, c 
 			for xi := range sc.xs {
 				r, g, b, a := boxHSpan(sc.v64, &sc.xs[xi], lo)
 				emit(y, xi, r, g, b, a)
+			}
+			continue
+		}
+		if blocks {
+			// Every weight 1 on both axes: one pass, no accumulator row.
+			boxfilter.SumBlocks(sc.g32, src[(vs.i0*srcW+lo)*4:], srcW*4, int(ax.srcN), vs.i1-vs.i0)
+			for xi := range sc.xs {
+				o := xi * 4
+				emit(y, xi, uint64(sc.g32[o]), uint64(sc.g32[o+1]), uint64(sc.g32[o+2]), uint64(sc.g32[o+3]))
 			}
 			continue
 		}

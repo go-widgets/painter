@@ -282,6 +282,9 @@ func TestBoxExactWithinStatedBound(t *testing.T) {
 		{9, 6, 6, 4}, {100, 30, 100, 9}, {30, 100, 7, 100}, {17, 17, 16, 16}, {300, 5, 299, 5},
 		// integer ratio too heavy for the uint32 SumGroups path
 		{300, 300, 1, 1}, {300, 4, 100, 2},
+		// whole-number horizontal ratio: SumBlocks with a whole-number or no vertical
+		// reduction, SumGroups when the vertical ratio is fractional
+		{64, 32, 16, 8}, {64, 10, 16, 10}, {64, 30, 16, 7}, {12, 9, 4, 3},
 		// a reduction taller than boxMaxWeight takes the uint64 path
 		{3, 70000, 2, 3}, {1, 66052, 1, 5}} {
 		src := make([]byte, c[0]*c[1]*4)
