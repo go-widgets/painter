@@ -8,17 +8,17 @@
 //
 // # Mapping (SVG 2, https://www.w3.org/TR/SVG2/)
 //
-//	FillRect          <rect> (shapes, §9.2)
+//	FillRect          <rect> (§10.2 The 'rect' element)
 //	StrokeRect        <path fill-rule="evenodd"> frame: outer rect minus inner rect
 //	FillRoundRect     <rect rx ry>
 //	StrokeRoundRect   <path fill-rule="evenodd"> ring of cubic Béziers
 //	PutPixel          <rect width="1" height="1">
 //	Text              <g><title>text</title><path/></g>: glyph OUTLINES (below)
-//	FillPath          <path d fill-rule> (paths, §9.3; painting, §13)
+//	FillPath          <path d fill-rule> (§9.3 Path data; §13.4 Fill properties)
 //	StrokePath        <path fill="none" stroke-width stroke-linecap/linejoin="round">
-//	PushClip/PopClip  <clipPath> + <g clip-path> (masking, §14.3)
+//	PushClip/PopClip  <clipPath> + <g clip-path> (the clipPath element, Masking chapter)
 //	PushTranslate     applied to the coordinates (see below), no <g transform>
-//	DrawImage         <image href="data:image/png;base64,…"> (embedded content, §11)
+//	DrawImage         <image href="data:image/png;base64,…"> (§12.3 The 'image' element; §13.10.3 'image-rendering')
 //	DrawMask          <image> of the ink tinted by the coverage mask
 //
 // Colour is sRGB, straight alpha, src-over: the same blend PixelPainter makes
@@ -65,7 +65,7 @@
 // rasteriser decide the look, and could fall back to another face when the
 // font fails to load. The trade-off: the run is not selectable or searchable
 // text. To keep the text accessible the string is carried in a <title> child of
-// the <g> (SVG 2 §5.4, accessible name), escaped. Bytes the font does not draw
+// the <g> (SVG 2 §5.7, the 'title' element), escaped. Bytes the font does not draw
 // are skipped but still advance the pen, exactly as PixelPainter.Text.
 //
 // # Determinism and limits
@@ -87,6 +87,7 @@ import (
 	"image"
 	"image/png"
 	"math"
+	mbits "math/bits"
 	"strconv"
 	"unicode/utf8"
 
@@ -308,10 +309,11 @@ func (r *Recorder) paint(name string, c painter.RGBA) {
 
 // shift applies the current translation to a point.
 func (r *Recorder) shift(x, y int) (int, int) {
-	if n := len(r.off); n > 0 {
-		return x + r.off[n-1][0], y + r.off[n-1][1]
+	n := len(r.off)
+	if n == 0 {
+		return x, y
 	}
-	return x, y
+	return x + r.off[n-1][0], y + r.off[n-1][1]
 }
 
 func inRange(vs ...int) bool {
@@ -502,34 +504,34 @@ func (r *Recorder) Text(x, y int, s string, ink painter.RGBA) {
 	x, y = r.shift(x, y)
 	n := r.TextScale()
 	var d []byte
-	for k := 0; k < len(s); k++ {
+	for k := range len(s) {
 		cols, ok := painter.Glyph(s[k])
 		if !ok {
 			continue
 		}
 		gx := x + k*painter.GlyphAdvance*n
-		for row := 0; row < painter.GlyphHeight; row++ {
-			for col := 0; col < painter.GlyphWidth; {
-				if cols[col]&(1<<row) == 0 {
-					col++
-					continue
-				}
-				end := col
-				for end < painter.GlyphWidth && cols[end]&(1<<row) != 0 {
-					end++
-				}
+		for row := range painter.GlyphHeight {
+			// bits has bit col set where this row of the glyph is inked; each
+			// maximal run of set bits becomes one rectangle.
+			var bits uint
+			for col := range painter.GlyphWidth {
+				bits |= uint(cols[col]>>row&1) << col
+			}
+			for bits != 0 {
+				col := mbits.TrailingZeros(bits)
+				run := mbits.TrailingZeros(^(bits >> col))
+				bits &^= (1<<run - 1) << col
 				d = append(d, 'M')
 				d = strconv.AppendInt(d, int64(gx+col*n), 10)
 				d = append(d, ' ')
 				d = strconv.AppendInt(d, int64(y+row*n), 10)
 				d = append(d, 'h')
-				d = strconv.AppendInt(d, int64((end-col)*n), 10)
+				d = strconv.AppendInt(d, int64(run*n), 10)
 				d = append(d, 'v')
 				d = strconv.AppendInt(d, int64(n), 10)
 				d = append(d, 'h')
-				d = strconv.AppendInt(d, int64(-(end-col)*n), 10)
+				d = strconv.AppendInt(d, int64(-run*n), 10)
 				d = append(d, 'z')
-				col = end
 			}
 		}
 	}
@@ -556,7 +558,7 @@ func xmlChar(c rune) bool {
 
 // escape writes s, already validated, as XML character data.
 func (r *Recorder) escape(s string) {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch s[i] {
 		case '&':
 			r.str("&amp;")
@@ -753,12 +755,12 @@ func (r *Recorder) DrawMask(dst painter.Rect, mask []byte, stride int, ink paint
 		return
 	}
 	pix := image.NewNRGBA(image.Rect(0, 0, dst.W, dst.H))
-	for y := 0; y < dst.H; y++ {
+	for y := range dst.H {
 		row := y * stride
 		if row+dst.W > len(mask) {
 			continue // unreadable rows stay transparent, as PixelPainter skips them
 		}
-		for x := 0; x < dst.W; x++ {
+		for x := range dst.W {
 			o := pix.PixOffset(x, y)
 			pix.Pix[o], pix.Pix[o+1], pix.Pix[o+2] = ink.R, ink.G, ink.B
 			pix.Pix[o+3] = uint8((uint32(mask[row+x])*uint32(ink.A) + 127) / 255)
@@ -774,10 +776,7 @@ func (r *Recorder) imageEl(dst painter.Rect, pix *image.NRGBA, pixelated bool) {
 	// Encode fails only when its writer does or the image is empty; a
 	// bytes.Buffer never fails and callers pass a non-empty NRGBA.
 	_ = enc.Encode(&png_, pix)
-	if base64.StdEncoding.EncodedLen(png_.Len())+256 > r.Limits.callBytes() {
-		r.fail(ErrTooLarge)
-		return
-	}
+	// The size bound is commit's; MaxImagePixels already bounds the PNG.
 	r.begin("<image")
 	r.attr("x", dst.X)
 	r.attr("y", dst.Y)

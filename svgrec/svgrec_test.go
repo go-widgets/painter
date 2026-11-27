@@ -52,6 +52,11 @@ func TestNewAndSize(t *testing.T) {
 	if w, h := r.Size(); w != svgrec.MaxDim || h != 1 {
 		t.Errorf("Size = %d,%d", w, h)
 	}
+	r = newRec(t, 1, svgrec.MaxDim)
+	if w, h := r.Size(); w != 1 || h != svgrec.MaxDim {
+		t.Errorf("Size = %d,%d", w, h)
+	}
+	newRec(t, 1, 1)
 }
 
 func TestDocumentWrapper(t *testing.T) {
@@ -116,6 +121,7 @@ func TestStrokeRect(t *testing.T) {
 	r.StrokeRect(painter.Rect{X: 0, Y: 0, W: 10, H: 8}, black, 4) // rings meet: filled
 	r.StrokeRect(painter.Rect{X: 0, Y: 0, W: 10, H: 8}, black, 3) // hole 4x2
 	r.StrokeRect(painter.Rect{X: 0, Y: 0, W: 0, H: 8}, black, 1)
+	r.StrokeRect(painter.Rect{X: 0, Y: 0, W: 8, H: 0}, black, 1)
 	r.StrokeRect(painter.Rect{X: 0, Y: 0, W: 8, H: 8}, painter.RGBA{}, 1)
 	want := `<path fill-rule="evenodd" fill="#000000" d="M0 0h10v8h-10zM1 1h8v6h-8z"/>
 <path fill-rule="evenodd" fill="#000000" d="M0 0h10v8h-10zM1 1h8v6h-8z"/>
@@ -135,6 +141,8 @@ func TestStrokeRoundRect(t *testing.T) {
 	r.StrokeRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 20}, 4, black, 6)  // 12 >= 20? no: hole 8x8, inner radius 0
 	r.StrokeRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 10}, 99, black, 5) // rings meet: filled, radius clamped
 	r.StrokeRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 20}, 0, black, 1)  // square
+	r.StrokeRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 0}, 4, black, 1)   // nothing
+	r.StrokeRoundRect(painter.Rect{X: 0, Y: 0, W: 0, H: 20}, 4, black, 1)   // nothing
 	want := `<path fill-rule="evenodd" fill="#000000" d="M4 0L16 0C18.209 0 20 1.791 20 4L20 16C20 18.209 18.209 20 16 20L4 20C1.791 20 0 18.209 0 16L0 4C0 1.791 1.791 0 4 0zM4 1L16 1C17.657 1 19 2.343 19 4L19 16C19 17.657 17.657 19 16 19L4 19C2.343 19 1 17.657 1 16L1 4C1 2.343 2.343 1 4 1z"/>
 <path fill-rule="evenodd" fill="#000000" d="M4 0L16 0C18.209 0 20 1.791 20 4L20 16C20 18.209 18.209 20 16 20L4 20C1.791 20 0 18.209 0 16L0 4C0 1.791 1.791 0 4 0zM6 6h8v8h-8z"/>
 <rect x="0" y="0" width="20" height="10" rx="5" fill="#000000"/>
@@ -223,7 +231,7 @@ func TestTextRefusals(t *testing.T) {
 		{"escape", "A\x1bB", 0, svgrec.ErrInvalidText},
 		{"U+FFFE", "A￾B", 0, svgrec.ErrInvalidText},
 		{"U+FFFF", "A￿B", 0, svgrec.ErrInvalidText},
-		{"too long", strings.Repeat("A", 1<<16+1), 0, svgrec.ErrTooLarge},
+		{"too long", strings.Repeat(" ", 1<<16+1), 0, svgrec.ErrTooLarge}, // spaces draw nothing: only the cap can refuse it
 		{"x out of range", "A", svgrec.MaxCoord + 1, svgrec.ErrRange},
 	}
 	for _, c := range cases {
@@ -250,12 +258,20 @@ func TestTextRefusals(t *testing.T) {
 	if _, err := parse(mustSVG(t, r)); err != nil {
 		t.Error(err)
 	}
-	// Silent no-ops.
+	// The cap is inclusive.
 	r = newRec(t, 40, 30)
+	r.Text(0, 0, strings.Repeat(" ", 1<<16), black)
+	if r.Err() != nil {
+		t.Errorf("a text of exactly the cap was refused: %v", r.Err())
+	}
+}
+
+func TestTextNoOps(t *testing.T) {
+	r := newRec(t, 40, 30)
 	r.Text(0, 0, "", black)
-	r.Text(0, 0, "A", painter.RGBA{})
-	if r.Err() != nil || r.Stats().Dropped != 0 {
-		t.Errorf("no-op text recorded an error: %v", r.Err())
+	r.Text(0, 0, "A", painter.RGBA{}) // fully transparent ink
+	if st := r.Stats(); r.Err() != nil || st.Elements != 0 || st.Dropped != 0 || body(t, r) != "" {
+		t.Errorf("no-op text recorded %q, %+v, %v", body(t, r), st, r.Err())
 	}
 }
 
@@ -334,6 +350,9 @@ func TestRangeRefusals(t *testing.T) {
 			if !errors.Is(r.Err(), svgrec.ErrRange) {
 				t.Errorf("Err = %v, want ErrRange", r.Err())
 			}
+			if st := r.Stats(); st.Elements != 0 || st.Dropped == 0 {
+				t.Errorf("a refused call must write nothing: %+v", st)
+			}
 			if _, err := parse(mustSVGAllowErr(r)); err != nil {
 				t.Error(err)
 			}
@@ -352,6 +371,7 @@ func TestAtTheRangeEdge(t *testing.T) {
 	r.Text(svgrec.MaxCoord, -svgrec.MaxCoord, "-", black)
 	r.PushTranslate(svgrec.MaxCoord, -svgrec.MaxCoord)
 	r.PopTranslate()
+	r.StrokePath(painter.NewPath().MoveTo(0, 0).LineTo(1, 1), black, svgrec.MaxCoord)
 	if r.Err() != nil {
 		t.Errorf("values at exactly the bound were refused: %v", r.Err())
 	}
@@ -442,16 +462,6 @@ func TestPaths(t *testing.T) {
 	r.PushTranslate(10, 20)
 	r.FillPath(painter.NewPath().MoveTo(-0.0001, 0).LineTo(0.0004, 1).LineTo(1, 1), black, painter.NonZero)
 	r.PopTranslate()
-	// nothing to paint
-	r.FillPath(nil, black, painter.NonZero)
-	r.FillPath(p, painter.RGBA{}, painter.NonZero)
-	r.FillPath(painter.NewPath(), black, painter.NonZero)
-	r.FillPath(painter.NewPath().MoveTo(1, 1).Close(), black, painter.NonZero)
-	r.StrokePath(nil, black, 1)
-	r.StrokePath(p, painter.RGBA{}, 1)
-	r.StrokePath(p, black, 0)
-	r.StrokePath(p, black, -1)
-	r.StrokePath(p, black, math.NaN())
 	want := `<path fill="#090909" d="M1.5 2L3 4Q1 1 2 2C1 2 3 4 5 6Z"/>
 <path fill-rule="evenodd" fill="#090909" d="M1.5 2L3 4Q1 1 2 2C1 2 3 4 5 6Z"/>
 <path fill="none" stroke="#000000" stroke-opacity="0.00392" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M1.5 2L3 4Q1 1 2 2C1 2 3 4 5 6Z"/>
@@ -462,6 +472,51 @@ func TestPaths(t *testing.T) {
 	}
 	if r.Err() != nil {
 		t.Errorf("no-op paths recorded %v", r.Err())
+	}
+}
+
+// noPanic fails the test when f panics: a guard that is gone must be reported
+// as a broken assertion, not only as a crash.
+func noPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if v := recover(); v != nil {
+			t.Errorf("%s panicked: %v", what, v)
+		}
+	}()
+	f()
+}
+
+func TestPathNoOps(t *testing.T) {
+	p := painter.NewPath().MoveTo(1.5, 2).LineTo(3, 4)
+	cases := []struct {
+		name string
+		do   func(r *svgrec.Recorder)
+	}{
+		{"fill nil", func(r *svgrec.Recorder) { r.FillPath(nil, black, painter.NonZero) }},
+		{"fill transparent", func(r *svgrec.Recorder) { r.FillPath(p, painter.RGBA{}, painter.NonZero) }},
+		{"fill empty path", func(r *svgrec.Recorder) { r.FillPath(painter.NewPath(), black, painter.NonZero) }},
+		{"fill move and close only", func(r *svgrec.Recorder) {
+			r.FillPath(painter.NewPath().MoveTo(1, 1).Close(), black, painter.NonZero)
+		}},
+		{"stroke nil", func(r *svgrec.Recorder) { r.StrokePath(nil, black, 1) }},
+		{"stroke transparent", func(r *svgrec.Recorder) { r.StrokePath(p, painter.RGBA{}, 1) }},
+		{"stroke width 0", func(r *svgrec.Recorder) { r.StrokePath(p, black, 0) }},
+		{"stroke width negative", func(r *svgrec.Recorder) { r.StrokePath(p, black, -1) }},
+		{"stroke width NaN", func(r *svgrec.Recorder) { r.StrokePath(p, black, math.NaN()) }},
+		{"stroke empty path", func(r *svgrec.Recorder) { r.StrokePath(painter.NewPath(), black, 1) }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRec(t, 40, 30)
+			noPanic(t, c.name, func() { c.do(r) })
+			if st := r.Stats(); r.Err() != nil || st.Elements != 0 || st.Dropped != 0 {
+				t.Errorf("recorded %+v, %v", st, r.Err())
+			}
+			if got := body(t, r); got != "" {
+				t.Errorf("wrote %q", got)
+			}
+		})
 	}
 }
 
@@ -629,6 +684,24 @@ func TestLimits(t *testing.T) {
 		b, err := r.SVG()
 		if !errors.Is(err, svgrec.ErrTooLarge) || len(b) == 0 {
 			t.Errorf("SVG = %d bytes, %v", len(b), err)
+		}
+	})
+	t.Run("document total is inclusive", func(t *testing.T) {
+		rec := func(limit int) ([]byte, error) {
+			r := newRec(t, 40, 30)
+			r.Limits.MaxTotalBytes = limit
+			r.FillRect(painter.Rect{W: 1, H: 1}, black)
+			return r.SVG()
+		}
+		doc, err := rec(0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := rec(len(doc)); err != nil {
+			t.Errorf("a document of exactly the limit was refused: %v", err)
+		}
+		if _, err := rec(len(doc) - 1); !errors.Is(err, svgrec.ErrTooLarge) {
+			t.Errorf("one byte over: %v", err)
 		}
 	})
 	t.Run("path", func(t *testing.T) {

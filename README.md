@@ -95,6 +95,68 @@ if c, ok := p.(painter.Clipper); ok {
 by [go-gfx/gfx/vector](https://github.com/go-gfx/gfx), in Go; that is the
 module's one dependency.
 
+## A recording backend: `svgrec`
+
+`svgrec.Recorder` turns the same calls into a **native SVG document**: `<rect>`,
+`<path>`, `<clipPath>`, and an `<image>` only where a raster is really drawn.
+The output is lossless, resizable and byte-for-byte deterministic: the same
+calls give the same bytes, with ids `c0`, `c1`, ... and fixed attribute order.
+
+```go
+r, _ := svgrec.New(1000, 700)
+widget.Draw(r, painter.LightTheme())
+doc, err := r.SVG() // err is the first call that was refused, if any
+```
+
+It implements `Clipper`, `Translator`, `PathPainter`, `ImagePainter` and
+`MaskPainter`. It does not implement `FacePainter` (below) or `RasterPainter`.
+
+| Painter call | SVG | Faithful? |
+| --- | --- | --- |
+| `FillRect`, `PutPixel` | `<rect>` with `fill`, `fill-opacity` | yes |
+| `FillRoundRect` | `<rect rx>` | radius clamped like PixelPainter; edge AA differs |
+| `StrokeRect` | an `evenodd` `<path>`: outer rectangle plus the inner one, rings drawn inward like PixelPainter; a plain `<rect>` once the rings meet | yes |
+| `StrokeRoundRect` | the same frame with Bézier corners (the rasteriser we test with has no arc command) | edge AA differs |
+| `Text` | glyph outlines, see below | yes, on the pixel grid |
+| `PushClip` / `PopClip` | `<clipPath><rect/></clipPath>` and a nested `<g clip-path>` | yes |
+| `PushTranslate` / `PopTranslate` | applied to the coordinates, no `<g transform>` | yes |
+| `FillPath` | `<path d fill-rule>` (`M L Q C Z`) | yes |
+| `StrokePath` | `<path fill="none" stroke stroke-width>` with round caps and joins | the width is in user units, so it **scales with the viewBox**; a zero-length subpath paints a dot in SVG and nothing in PixelPainter |
+| `DrawImage`, `DrawMask` | `<image href="data:image/png;base64,...">`, `image-rendering="pixelated"` when enlarged | raster by nature; counted in `Stats.Raster` |
+
+**Text is outlines, not `<text>`.** An embedded subset font would need a font
+writer, a TrueType face in the file, and a viewer that honours it (a viewer
+that does not falls back to another face and the layout moves). The 5x7 bitmap
+font is a pixel grid, so each string becomes one `<path>` of merged horizontal
+runs inside `<g><title>text</title>...</g>`: it looks the same everywhere and
+scales without blur. The price is that the run is not selectable text, and it
+is larger than a `<text>` element; the `<title>` carries the string, escaped,
+for assistive technology (SVG 2, accessible names). Text drawn through a
+TrueType `Face` is not implemented (`FacePainter` is not offered), so such text
+reaches the recorder as `DrawMask`, a raster.
+
+**Limits.** Painter methods return no error, so a refused call is dropped, the
+first error is kept, and `Err()` and `SVG()` report it. Text must be valid
+UTF-8 and made of XML 1.0 characters; coordinates are bounded by `MaxCoord`
+(1<<24) and the canvas by `MaxDim` (1<<14); `Limits` bounds one call
+(`MaxCallBytes`, 4 MiB), the whole document (`MaxTotalBytes`, 64 MiB) and an
+image (`MaxImagePixels`, 1 Mi). The fuzz targets parse the output back with
+`encoding/xml` and fail on any element or attribute outside the writer's own
+vocabulary; the corpus is committed in `svgrec/testdata/fuzz`.
+
+**Equivalence.** The tests render the same scenes with `PixelPainter` and with
+the recorder followed by the pure-Go rasteriser `go-gfx/gfx/svg`, scale 1, over
+an opaque ground. Stated tolerance, per channel (0..255): rectangles, stroked
+rectangles, bitmap text, clips, translation and the sample widgets **0**;
+filled and stroked paths **1**; opaque images and binary masks **0**; rounded
+rectangles **36** and stroked rounded ones **61** (on 3 % and 7.5 % of the
+pixels: the raster painter covers a corner by distance to the pixel centre,
+the SVG rasteriser by true coverage); translucent images and masks **50**, a
+quirk of that rasteriser's image path (the colour of a translucent pixel is
+weighted by alpha twice) rather than of the recorder. Goldens for four
+widgets live in `svgrec/testdata`; regenerate with `go test ./svgrec -run
+TestGolden -update`.
+
 ## Try it
 
 ```bash
