@@ -101,6 +101,7 @@ func TestFillRoundRect(t *testing.T) {
 	r.FillRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 10}, 0, black)  // square
 	r.FillRoundRect(painter.Rect{X: 0, Y: 0, W: 20, H: 10}, -3, black) // square
 	r.FillRoundRect(painter.Rect{X: 0, Y: 0, W: 0, H: 10}, 3, black)
+	r.FillRoundRect(painter.Rect{X: 0, Y: 0, W: 10, H: 0}, 3, black)
 	r.FillRoundRect(painter.Rect{X: 0, Y: 0, W: 5, H: 10}, 3, painter.RGBA{})
 	want := `<rect x="0" y="0" width="20" height="20" rx="4" fill="#000000"/>
 <rect x="0" y="0" width="20" height="10" rx="5" fill="#000000"/>

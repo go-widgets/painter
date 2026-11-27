@@ -58,6 +58,9 @@ needs it type-asserts, and draws something sensible when the answer is no:
 | `FacePainter` | `TextFace` | `face.go` |
 | `RasterPainter` | `Raster` (a marker) | `raster.go` |
 
+`svgrec.Recorder` (`svgrec/`) implements `Clipper`, `Translator`, `PathPainter`,
+`ImagePainter` and `MaskPainter`, and records instead of drawing (below).
+
 `IconBGRAOver` (`icon.go`) renders a decoded RGBA picture, shrunk to fit a box
 and composited over a background colour, as the top-down BGRA a native button
 (a Windows DIB section) takes; `IconSize` is its aspect-preserving fit. A
@@ -131,7 +134,7 @@ font is a pixel grid, so each string becomes one `<path>` of merged horizontal
 runs inside `<g><title>text</title>...</g>`: it looks the same everywhere and
 scales without blur. The price is that the run is not selectable text, and it
 is larger than a `<text>` element; the `<title>` carries the string, escaped,
-for assistive technology (SVG 2, accessible names). Text drawn through a
+for assistive technology (SVG 2 §5.7, the `title` element). Text drawn through a
 TrueType `Face` is not implemented (`FacePainter` is not offered), so such text
 reaches the recorder as `DrawMask`, a raster.
 
@@ -156,6 +159,21 @@ quirk of that rasteriser's image path (the colour of a translucent pixel is
 weighted by alpha twice) rather than of the recorder. Goldens for four
 widgets live in `svgrec/testdata`; regenerate with `go test ./svgrec -run
 TestGolden -update`.
+
+**Cost (a baseline, not a gate).** One 1000x700 frame (background, 24 buttons,
+12 progress bars, 30 labels), Apple M4 Max, one core, `go test -bench Frame
+-benchmem -cpu 1 ./svgrec`, best of 4. The machine was loaded (1-minute load
+9 to 14, above the 8 we measure under), so read the times as indicative only;
+bytes and allocations are exact.
+
+| | time | allocated | allocs | output |
+| --- | ---: | ---: | ---: | ---: |
+| `PixelPainter` (reusable RGBA buffer) | 177 us | 1.3 KB | 55 | 2.8 MB of pixels |
+| `Recorder`, calls only | 300 us | 397 KB | 455 | 138 elements, 130 KB of SVG |
+| `Recorder` plus `SVG()` | 329 us | 528 KB | 458 | the same document |
+
+The recording is the larger object to build, and the smaller one to keep: 21
+times fewer bytes than the pixels, at any zoom.
 
 ## Try it
 

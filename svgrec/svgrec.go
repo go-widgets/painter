@@ -309,11 +309,10 @@ func (r *Recorder) paint(name string, c painter.RGBA) {
 
 // shift applies the current translation to a point.
 func (r *Recorder) shift(x, y int) (int, int) {
-	n := len(r.off)
-	if n == 0 {
-		return x, y
+	for _, o := range r.off[max(len(r.off)-1, 0):] {
+		x, y = x+o[0], y+o[1]
 	}
-	return x + r.off[n-1][0], y + r.off[n-1][1]
+	return x, y
 }
 
 func inRange(vs ...int) bool {
