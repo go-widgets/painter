@@ -15,6 +15,26 @@ const (
 	glyphAdvance = 6 // 5 columns + 1 spacing
 )
 
+// The built-in font's cell, exported so a back-end that draws the glyphs as
+// outlines (svgrec) lays them out exactly where PixelPainter lights pixels.
+const (
+	// GlyphWidth is the number of bit columns of a glyph.
+	GlyphWidth = 5
+	// GlyphHeight is the number of rows of a glyph.
+	GlyphHeight = glyphHeight
+	// GlyphAdvance is the pen advance per byte of text at scale 1: GlyphWidth
+	// columns plus one of spacing.
+	GlyphAdvance = glyphAdvance
+)
+
+// Glyph returns the built-in font's columns for byte b: GlyphWidth bit masks,
+// LSB = top row. ok is false for a byte the font does not draw, which
+// PixelPainter.Text skips (it still advances the pen).
+func Glyph(b byte) (cols [GlyphWidth]byte, ok bool) {
+	cols, ok = font5x7[b]
+	return cols, ok
+}
+
 var font5x7 = map[byte][5]byte{
 	' ': {0x00, 0x00, 0x00, 0x00, 0x00},
 	'.': {0x00, 0x60, 0x60, 0x00, 0x00},
