@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" viewBox="0 0 100 60">
+<clipPath id="c0"><rect x="10" y="10" width="60" height="30"/></clipPath><g clip-path="url(#c0)">
+<rect x="5" y="5" width="80" height="40" rx="6" fill="#1e5ac8"/>
+<path fill-rule="evenodd" fill="#ffffff" fill-opacity="0.78431" d="M16 12L58 12C60.209 12 62 13.791 62 16L62 28C62 30.209 60.209 32 58 32L16 32C13.791 32 12 30.209 12 28L12 16C12 13.791 13.791 12 16 12zM16 13L58 13C59.657 13 61 14.343 61 16L61 28C61 29.657 59.657 31 58 31L16 31C14.343 31 13 29.657 13 28L13 16C13 14.343 14.343 13 16 13z"/>
+<g><title>A&amp;B &lt;C&gt;</title><path fill="#ffffff" d="M17 18h3v1h-3zM16 19h1v1h-1zM20 19h1v1h-1zM16 20h1v1h-1zM20 20h1v1h-1zM16 21h1v1h-1zM20 21h1v1h-1zM16 22h5v1h-5zM16 23h1v1h-1zM20 23h1v1h-1zM16 24h1v1h-1zM20 24h1v1h-1zM28 18h4v1h-4zM28 19h1v1h-1zM32 19h1v1h-1zM28 20h1v1h-1zM32 20h1v1h-1zM28 21h4v1h-4zM28 22h1v1h-1zM32 22h1v1h-1zM28 23h1v1h-1zM32 23h1v1h-1zM28 24h4v1h-4zM47 18h3v1h-3zM46 19h1v1h-1zM50 19h1v1h-1zM46 20h1v1h-1zM46 21h1v1h-1zM46 22h1v1h-1zM46 23h1v1h-1zM50 23h1v1h-1zM47 24h3v1h-3z"/></g>
+</g>
+</svg>

@@ -1,0 +1,5 @@
+go test fuzz v1
+string("-")
+int(16777216)
+int(-16777217)
+int(1000000)
