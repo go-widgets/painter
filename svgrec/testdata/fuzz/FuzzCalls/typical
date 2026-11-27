@@ -1,0 +1,12 @@
+go test fuzz v1
+int(4)
+int(5)
+int(12)
+int(9)
+int(3)
+int(10)
+int(20)
+int(30)
+int(200)
+float64(1.5)
+float64(2.5)
