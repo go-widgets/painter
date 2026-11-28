@@ -14,6 +14,7 @@
 //	StrokeRoundRect   <path fill-rule="evenodd"> ring of cubic Béziers
 //	PutPixel          <rect width="1" height="1">
 //	Text              <g><title>text</title><path/></g>: glyph OUTLINES (below)
+//	TextGlyphs        <g fill><title/><use href x y/></g> + one <symbol> per distinct glyph in <defs> (glyph.go)
 //	FillPath          <path d fill-rule> (§9.3 Path data; §13.4 Fill properties)
 //	StrokePath        <path fill="none" stroke-width stroke-linecap/linejoin="round">
 //	PushClip/PopClip  <clipPath> + <g clip-path> (the clipPath element, Masking chapter)
@@ -164,6 +165,13 @@ type Recorder struct {
 	scale int
 	err   error
 	stats Stats
+
+	// The glyph symbols (see glyph.go): the <symbol> markup written into <defs>,
+	// the symbol id of each Key drawn so far, and the path data behind each id so
+	// a hash collision is seen instead of silently drawing the wrong glyph.
+	defs   []byte
+	glyphs map[string]string
+	defIDs map[string]string
 }
 
 var (
@@ -192,13 +200,14 @@ func (r *Recorder) Err() error { return r.err }
 // Stats reports what has been recorded.
 func (r *Recorder) Stats() Stats {
 	s := r.stats
-	s.Bytes = len(r.body)
+	s.Bytes = len(r.body) + len(r.defs)
 	return s
 }
 
 // Reset forgets every call, keeping the size, the limits and the text scale.
 func (r *Recorder) Reset() {
 	r.body, r.off, r.open, r.nclip, r.err, r.stats = r.body[:0], nil, 0, 0, nil, Stats{}
+	r.defs, r.glyphs, r.defIDs = r.defs[:0], nil, nil
 }
 
 // SVG returns the document. Groups still open are closed in the copy returned,
@@ -216,6 +225,11 @@ func (r *Recorder) SVG() ([]byte, error) {
 	b = append(b, ' ')
 	b = strconv.AppendInt(b, int64(r.h), 10)
 	b = append(b, "\">\n"...)
+	if len(r.defs) > 0 {
+		b = append(b, "<defs>\n"...)
+		b = append(b, r.defs...)
+		b = append(b, "</defs>\n"...)
+	}
 	b = append(b, r.body...)
 	for i := 0; i < r.open; i++ {
 		b = append(b, "</g>\n"...)
@@ -251,7 +265,7 @@ func (r *Recorder) attr(n string, v int) {
 
 // commit appends the scratch element to the body when it fits the limits.
 func (r *Recorder) commit(raster bool) {
-	if len(r.buf) > r.Limits.callBytes() || len(r.body)+len(r.buf) > r.Limits.totalBytes() {
+	if len(r.buf) > r.Limits.callBytes() || len(r.body)+len(r.defs)+len(r.buf) > r.Limits.totalBytes() {
 		r.fail(ErrTooLarge)
 		return
 	}
@@ -667,11 +681,24 @@ func (r *Recorder) StrokePath(pth *painter.Path, c painter.RGBA, width float64) 
 
 // pathData finishes a path element whose attributes are in the scratch buffer.
 func (r *Recorder) pathData(pth *painter.Path) {
-	var d []byte
-	var perr error
-	drawn := false
 	dx, dy := r.shift(0, 0)
-	ox, oy := float64(dx), float64(dy)
+	d, drawn, perr := r.encodePath(pth, float64(dx), float64(dy))
+	switch {
+	case perr != nil:
+		r.fail(perr)
+	case !drawn:
+		// nothing to paint
+	default:
+		r.str(` d="`)
+		r.buf = append(r.buf, d...)
+		r.str("\"/>\n")
+		r.commit(false)
+	}
+}
+
+// encodePath writes pth, moved by (ox, oy), as absolute path data (SVG 2 §9.3).
+// drawn is false when the path holds nothing but moves and closes.
+func (r *Recorder) encodePath(pth *painter.Path, ox, oy float64) (d []byte, drawn bool, perr error) {
 	pth.Each(func(op vector.PathOp, pts ...[2]float64) {
 		letter := "MLQCZ"[op]
 		if op != vector.OpMove && op != vector.OpClose {
@@ -694,17 +721,7 @@ func (r *Recorder) pathData(pth *painter.Path) {
 			perr = ErrTooLarge
 		}
 	})
-	switch {
-	case perr != nil:
-		r.fail(perr)
-	case !drawn:
-		// nothing to paint
-	default:
-		r.str(` d="`)
-		r.buf = append(r.buf, d...)
-		r.str("\"/>\n")
-		r.commit(false)
-	}
+	return d, drawn, perr
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && math.Abs(v) <= MaxCoord }

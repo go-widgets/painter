@@ -121,6 +121,7 @@ It implements `Clipper`, `Translator`, `PathPainter`, `ImagePainter` and
 | `StrokeRect` | an `evenodd` `<path>`: outer rectangle plus the inner one, rings drawn inward like PixelPainter; a plain `<rect>` once the rings meet | yes |
 | `StrokeRoundRect` | the same frame with Bézier corners (the rasteriser we test with has no arc command) | edge AA differs |
 | `Text` | glyph outlines, see below | yes, on the pixel grid |
+| `TextGlyphs` (recorder method) | one `<symbol>` per distinct glyph in `<defs>`, one `<use href x y>` per occurrence, inside `<g fill><title>text</title>` | yes |
 | `PushClip` / `PopClip` | `<clipPath><rect/></clipPath>` and a nested `<g clip-path>` | yes |
 | `PushTranslate` / `PopTranslate` | applied to the coordinates, no `<g transform>` | yes |
 | `FillPath` | `<path d fill-rule>` (`M L Q C Z`) | yes |
@@ -137,6 +138,19 @@ is larger than a `<text>` element; the `<title>` carries the string, escaped,
 for assistive technology (SVG 2 §5.7, the `title` element). Text drawn through a
 TrueType `Face` is not implemented (`FacePainter` is not offered), so such text
 reaches the recorder as `DrawMask`, a raster.
+
+**Glyph symbols.** A caller that owns the outlines (a text shaper) draws a run
+with `Recorder.TextGlyphs(text, []svgrec.Glyph{{Key, X, Y, Outline}}, ink)`.
+Each distinct glyph is written once, origin-relative, as a
+`<symbol overflow="visible"><path/></symbol>` in `<defs>` (SVG 2, structure,
+5.3 to 5.6) with a content-addressed id, and each occurrence is a `<use>` at
+its pen position: a page of text costs its alphabet plus one short element per
+letter, not one path per letter. `Key` names the outline; `Outline` is called at
+most once per key and recorder. `go-widgets/svg` `Assemble` merges the symbols
+of different frames, and expands them in its still frames. On a 40 line, 1600
+glyph page of 26 distinct outlines (`go test -bench TextPage ./svgrec`): 1 099 644
+bytes (257 757 gzip) drawn as one path per glyph, 87 436 bytes (11 699 gzip)
+as symbols.
 
 **Limits.** Painter methods return no error, so a refused call is dropped, the
 first error is kept, and `Err()` and `SVG()` report it. Text must be valid
